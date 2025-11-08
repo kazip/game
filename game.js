@@ -1,9 +1,13 @@
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
+const WORLD_SIZE = 500;
+const MIN_BOARD_SIZE = 260;
+const gameContainer = document.querySelector(".game-container");
+
 const cat = {
-  x: canvas.width / 2,
-  y: canvas.height / 2,
+  x: WORLD_SIZE / 2,
+  y: WORLD_SIZE / 2,
   size: 36,
   speed: 180 // pixels per second
 };
@@ -24,6 +28,7 @@ const messageEl = document.getElementById("message");
 const restartBtn = document.getElementById("restart");
 const scoreEl = document.getElementById("score");
 const timerEl = document.getElementById("timer");
+const controlsContainer = document.querySelector(".controls");
 const controlButtons = document.querySelectorAll(".control-btn");
 
 const pointerState = new Map();
@@ -46,22 +51,59 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function updateBoardSize() {
+  if (!gameContainer) {
+    return;
+  }
+
+  const viewportWidth = window.innerWidth || WORLD_SIZE;
+  const containerWidth = gameContainer.clientWidth || viewportWidth;
+  const paddedViewportWidth = Math.max(viewportWidth - 32, 160);
+  const widthLimit = Math.min(containerWidth, paddedViewportWidth, WORLD_SIZE);
+
+  if (widthLimit <= 0) {
+    document.documentElement.style.setProperty("--board-size", `${MIN_BOARD_SIZE}px`);
+    return;
+  }
+
+  const viewportHeight = window.innerHeight || WORLD_SIZE;
+  const containerTop = gameContainer.getBoundingClientRect().top;
+  const controlsVisible =
+    controlsContainer && window.getComputedStyle(controlsContainer).display !== "none";
+  const controlsHeight = controlsVisible ? controlsContainer.offsetHeight : 0;
+  const verticalPadding = 180 + controlsHeight;
+  const heightLimitRaw = viewportHeight - containerTop - verticalPadding;
+  const minimumHeightAllowance = Math.min(MIN_BOARD_SIZE, widthLimit);
+  const heightLimit = Math.min(
+    Math.max(heightLimitRaw, minimumHeightAllowance),
+    WORLD_SIZE
+  );
+
+  let boardSize = Math.min(widthLimit, heightLimit);
+  if (widthLimit >= MIN_BOARD_SIZE && heightLimit >= MIN_BOARD_SIZE) {
+    boardSize = Math.max(boardSize, MIN_BOARD_SIZE);
+  }
+
+  document.documentElement.style.setProperty("--board-size", `${boardSize}px`);
+}
+
 function spawnFish() {
   const margin = 30;
-  fish.x = margin + Math.random() * (canvas.width - margin * 2);
-  fish.y = margin + Math.random() * (canvas.height - margin * 2);
+  fish.x = margin + Math.random() * (WORLD_SIZE - margin * 2);
+  fish.y = margin + Math.random() * (WORLD_SIZE - margin * 2);
   fish.alive = true;
   remaining = 10;
 }
 
 function resetGame() {
+  updateBoardSize();
   score = 0;
   scoreEl.textContent = score;
   gameOver = false;
   messageEl.textContent = "";
   restartBtn.disabled = true;
-  cat.x = canvas.width / 2;
-  cat.y = canvas.height / 2;
+  cat.x = WORLD_SIZE / 2;
+  cat.y = WORLD_SIZE / 2;
   spawnFish();
   lastTimestamp = performance.now();
   requestAnimationFrame(loop);
@@ -72,6 +114,7 @@ function endGame(reason) {
   fish.alive = false;
   restartBtn.disabled = false;
   messageEl.textContent = reason + ` Результат: ${score}.`;
+  updateBoardSize();
 }
 
 function update(delta) {
@@ -89,8 +132,8 @@ function update(delta) {
     cat.x += distance;
   }
 
-  cat.x = clamp(cat.x, cat.size / 2, canvas.width - cat.size / 2);
-  cat.y = clamp(cat.y, cat.size / 2, canvas.height - cat.size / 2);
+  cat.x = clamp(cat.x, cat.size / 2, WORLD_SIZE - cat.size / 2);
+  cat.y = clamp(cat.y, cat.size / 2, WORLD_SIZE - cat.size / 2);
 
   if (fish.alive) {
     const dx = cat.x - fish.x;
@@ -161,12 +204,23 @@ function drawFish() {
   ctx.restore();
 }
 
+function prepareCanvasForFrame() {
+  const dpr = window.devicePixelRatio || 1;
+  const targetSize = Math.round(WORLD_SIZE * dpr);
+  if (canvas.width !== targetSize || canvas.height !== targetSize) {
+    canvas.width = targetSize;
+    canvas.height = targetSize;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+}
+
 function loop(timestamp) {
   if (gameOver) return;
 
   const delta = (timestamp - lastTimestamp) / 1000;
   lastTimestamp = timestamp;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  prepareCanvasForFrame();
   update(delta);
   drawFish();
   drawCat();
@@ -245,6 +299,21 @@ window.addEventListener("blur", () => {
   });
   pointerState.clear();
 });
+
+window.addEventListener("resize", () => {
+  updateBoardSize();
+});
+
+const coarsePointerQuery = typeof window.matchMedia === "function"
+  ? window.matchMedia("(pointer: coarse)")
+  : null;
+if (coarsePointerQuery) {
+  if (typeof coarsePointerQuery.addEventListener === "function") {
+    coarsePointerQuery.addEventListener("change", updateBoardSize);
+  } else if (typeof coarsePointerQuery.addListener === "function") {
+    coarsePointerQuery.addListener(updateBoardSize);
+  }
+}
 
 // Запуск игры при загрузке страницы
 resetGame();
