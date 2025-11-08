@@ -24,6 +24,23 @@ const messageEl = document.getElementById("message");
 const restartBtn = document.getElementById("restart");
 const scoreEl = document.getElementById("score");
 const timerEl = document.getElementById("timer");
+const controlButtons = document.querySelectorAll(".control-btn");
+
+const pointerState = new Map();
+const directionToKey = {
+  up: "ArrowUp",
+  down: "ArrowDown",
+  left: "ArrowLeft",
+  right: "ArrowRight"
+};
+const directionKeys = new Set(Object.values(directionToKey));
+
+function normalizeKey(key) {
+  if (key.startsWith("Arrow")) {
+    return key;
+  }
+  return key.toLowerCase();
+}
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -157,16 +174,76 @@ function loop(timestamp) {
 }
 
 window.addEventListener("keydown", (event) => {
-  keys.add(event.key);
+  const key = normalizeKey(event.key);
+  if (directionKeys.has(key)) {
+    event.preventDefault();
+  }
+  keys.add(key);
 });
 
 window.addEventListener("keyup", (event) => {
-  keys.delete(event.key);
+  const key = normalizeKey(event.key);
+  keys.delete(key);
 });
 
 restartBtn.addEventListener("click", () => {
   if (!gameOver) return;
   resetGame();
+});
+
+function activatePointer(button, key, pointerId) {
+  keys.add(key);
+  button.classList.add("active");
+  pointerState.set(pointerId, { key, button });
+}
+
+function deactivatePointer(pointerId) {
+  const state = pointerState.get(pointerId);
+  if (!state) return;
+  keys.delete(state.key);
+  state.button.classList.remove("active");
+  pointerState.delete(pointerId);
+}
+
+controlButtons.forEach((button) => {
+  button.addEventListener("pointerdown", (event) => {
+    const direction = button.dataset.direction;
+    const key = directionToKey[direction];
+    if (!key) return;
+    event.preventDefault();
+    if (button.setPointerCapture) {
+      button.setPointerCapture(event.pointerId);
+    }
+    activatePointer(button, key, event.pointerId);
+  });
+
+  button.addEventListener("pointerup", (event) => {
+    event.preventDefault();
+    if (button.releasePointerCapture) {
+      button.releasePointerCapture(event.pointerId);
+    }
+    deactivatePointer(event.pointerId);
+  });
+
+  button.addEventListener("pointercancel", (event) => {
+    deactivatePointer(event.pointerId);
+  });
+
+  button.addEventListener("lostpointercapture", (event) => {
+    deactivatePointer(event.pointerId);
+  });
+
+  button.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+  });
+});
+
+window.addEventListener("blur", () => {
+  keys.clear();
+  pointerState.forEach(({ button }) => {
+    button.classList.remove("active");
+  });
+  pointerState.clear();
 });
 
 // Запуск игры при загрузке страницы

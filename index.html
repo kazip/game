@@ -14,6 +14,16 @@
       <div>Время: <span id="timer">10.0</span> c</div>
     </div>
     <canvas id="game" width="500" height="500" aria-label="Игровое поле"></canvas>
+    <div class="controls" role="group" aria-label="Элементы управления для сенсорных устройств">
+      <div class="controls-row">
+        <button class="control-btn" data-direction="up" type="button" aria-label="Вверх">▲</button>
+      </div>
+      <div class="controls-row">
+        <button class="control-btn" data-direction="left" type="button" aria-label="Влево">◀</button>
+        <button class="control-btn" data-direction="down" type="button" aria-label="Вниз">▼</button>
+        <button class="control-btn" data-direction="right" type="button" aria-label="Вправо">▶</button>
+      </div>
+    </div>
     <div id="message" role="status"></div>
     <button id="restart" type="button">Играть снова</button>
   </div>
