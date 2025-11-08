@@ -9,8 +9,14 @@ const cat = {
   x: WORLD_SIZE / 2,
   y: WORLD_SIZE / 2,
   size: 36,
-  speed: 180 // pixels per second
+  speed: 180, // pixels per second
+  facing: 1,
+  moving: false,
+  walkCycle: 0,
+  stepAccumulator: 0
 };
+
+const WALK_FREQUENCY = 4; // steps per second while the cat is moving
 
 const fish = {
   x: 0,
@@ -39,6 +45,159 @@ const directionToKey = {
   right: "ArrowRight"
 };
 const directionKeys = new Set(Object.values(directionToKey));
+
+class SoundManager {
+  constructor() {
+    this.context = null;
+    this.masterGain = null;
+    this.musicGain = null;
+    this.sfxGain = null;
+    this.enabled = false;
+    this.padOscillators = [];
+    this.musicLoopId = null;
+    this.lastStepTime = 0;
+  }
+
+  init() {
+    if (this.enabled) {
+      return;
+    }
+
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (typeof AudioContext !== "function") {
+      return;
+    }
+
+    this.context = new AudioContext();
+    this.masterGain = this.context.createGain();
+    this.masterGain.gain.value = 0.7;
+    this.masterGain.connect(this.context.destination);
+
+    this.musicGain = this.context.createGain();
+    this.musicGain.gain.value = 0;
+    this.musicGain.connect(this.masterGain);
+
+    this.sfxGain = this.context.createGain();
+    this.sfxGain.gain.value = 1;
+    this.sfxGain.connect(this.masterGain);
+
+    this.enabled = true;
+    this.startMusic();
+  }
+
+  startMusic() {
+    if (!this.enabled || this.padOscillators.length > 0 || this.musicLoopId) {
+      return;
+    }
+
+    const ctx = this.context;
+    const now = ctx.currentTime;
+    const padGain = ctx.createGain();
+    padGain.gain.setValueAtTime(0.0001, now);
+    padGain.gain.exponentialRampToValueAtTime(0.25, now + 4);
+    padGain.connect(this.musicGain);
+
+    const padNotes = [261.63, 329.63, 392.0];
+    padNotes.forEach((frequency, index) => {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(frequency, now);
+      const gain = ctx.createGain();
+      gain.gain.value = 0.14 / padNotes.length;
+      osc.connect(gain);
+      gain.connect(padGain);
+      osc.start(now + index * 0.05);
+      this.padOscillators.push({ osc, gain });
+    });
+
+    this.musicGain.gain.linearRampToValueAtTime(0.35, now + 6);
+    this.playArpeggio();
+    this.musicLoopId = window.setInterval(() => {
+      this.playArpeggio();
+    }, 4800);
+  }
+
+  playArpeggio() {
+    if (!this.enabled) {
+      return;
+    }
+    const ctx = this.context;
+    const pattern = [0, 4, 7, 12, 7, 4];
+    const start = ctx.currentTime;
+    pattern.forEach((interval, index) => {
+      const osc = ctx.createOscillator();
+      osc.type = "triangle";
+      const time = start + index * 0.4;
+      const frequency = 261.63 * Math.pow(2, interval / 12);
+      osc.frequency.setValueAtTime(frequency, time);
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, time);
+      gain.gain.exponentialRampToValueAtTime(0.06, time + 0.08);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.32);
+      osc.connect(gain);
+      gain.connect(this.musicGain);
+      osc.start(time);
+      osc.stop(time + 0.45);
+    });
+  }
+
+  playCatch() {
+    if (!this.enabled) {
+      return;
+    }
+    const ctx = this.context;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(660, now);
+    osc.frequency.exponentialRampToValueAtTime(1320, now + 0.2);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.4, now + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.4);
+  }
+
+  playStep() {
+    if (!this.enabled || !this.sfxGain) {
+      return;
+    }
+
+    const ctx = this.context;
+    const now = ctx.currentTime;
+    if (now - this.lastStepTime < 0.18) {
+      return;
+    }
+    this.lastStepTime = now;
+
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(180, now);
+    osc.frequency.exponentialRampToValueAtTime(120, now + 0.25);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.22, now + 0.04);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
+
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.35);
+  }
+}
+
+const soundManager = new SoundManager();
+
+function ensureAudioActive() {
+  soundManager.init();
+  if (soundManager.context && soundManager.context.state === "suspended") {
+    soundManager.context.resume();
+  }
+}
 
 function normalizeKey(key) {
   if (key.startsWith("Arrow")) {
@@ -104,6 +263,10 @@ function resetGame() {
   restartBtn.disabled = true;
   cat.x = WORLD_SIZE / 2;
   cat.y = WORLD_SIZE / 2;
+  cat.moving = false;
+  cat.walkCycle = 0;
+  cat.stepAccumulator = 0;
+  cat.facing = 1;
   spawnFish();
   lastTimestamp = performance.now();
   requestAnimationFrame(loop);
@@ -118,18 +281,36 @@ function endGame(reason) {
 }
 
 function update(delta) {
-  const distance = cat.speed * delta;
-  if (keys.has("ArrowUp") || keys.has("w")) {
-    cat.y -= distance;
-  }
-  if (keys.has("ArrowDown") || keys.has("s")) {
-    cat.y += distance;
-  }
-  if (keys.has("ArrowLeft") || keys.has("a")) {
-    cat.x -= distance;
-  }
-  if (keys.has("ArrowRight") || keys.has("d")) {
-    cat.x += distance;
+  const horizontalInput =
+    (keys.has("ArrowRight") || keys.has("d") ? 1 : 0) -
+    (keys.has("ArrowLeft") || keys.has("a") ? 1 : 0);
+  const verticalInput =
+    (keys.has("ArrowDown") || keys.has("s") ? 1 : 0) -
+    (keys.has("ArrowUp") || keys.has("w") ? 1 : 0);
+
+  const hasInput = horizontalInput !== 0 || verticalInput !== 0;
+  if (hasInput) {
+    const length = Math.hypot(horizontalInput, verticalInput) || 1;
+    const normalizedX = horizontalInput / length;
+    const normalizedY = verticalInput / length;
+    const distance = cat.speed * delta;
+    cat.x += normalizedX * distance;
+    cat.y += normalizedY * distance;
+    cat.moving = true;
+    if (Math.abs(normalizedX) > 0.1) {
+      cat.facing = normalizedX >= 0 ? 1 : -1;
+    }
+    const walkIncrement = delta * WALK_FREQUENCY;
+    cat.walkCycle = (cat.walkCycle + walkIncrement) % 1;
+    cat.stepAccumulator += walkIncrement;
+    while (cat.stepAccumulator >= 0.5) {
+      cat.stepAccumulator -= 0.5;
+      soundManager.playStep();
+    }
+  } else {
+    cat.moving = false;
+    cat.walkCycle = 0;
+    cat.stepAccumulator = 0;
   }
 
   cat.x = clamp(cat.x, cat.size / 2, WORLD_SIZE - cat.size / 2);
@@ -143,6 +324,7 @@ function update(delta) {
       score += 1;
       scoreEl.textContent = score;
       spawnFish();
+      soundManager.playCatch();
     }
   }
 
@@ -157,26 +339,127 @@ function update(delta) {
 function drawCat() {
   ctx.save();
   ctx.translate(cat.x, cat.y);
+  ctx.scale(cat.facing, 1);
+
+  const cycle = cat.walkCycle * Math.PI * 2;
+  const bobbing = cat.moving ? Math.cos(cycle) * 2 : 0;
+
+  // Tail
+  ctx.save();
+  ctx.translate(-cat.size * 0.45, -cat.size * 0.1 + bobbing * 0.2);
+  const tailSwing = cat.moving ? Math.sin(cycle + Math.PI / 2) * 8 : 0;
+  ctx.rotate((tailSwing * Math.PI) / 180);
   ctx.fillStyle = "#ffb347";
   ctx.beginPath();
-  ctx.ellipse(0, 0, cat.size / 2, cat.size / 2.4, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, cat.size * 0.35, cat.size * 0.12, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.translate(0, bobbing);
+
+  // Back legs
+  ctx.fillStyle = "#f2a73a";
+  for (let i = -1; i <= 1; i += 2) {
+    const swing = cat.moving ? Math.sin(cycle + (i < 0 ? 0 : Math.PI)) * 4 : 0;
+    ctx.beginPath();
+    ctx.ellipse(i * cat.size * 0.23 + swing * 0.2, cat.size * 0.42, cat.size * 0.18, cat.size * 0.14, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Body
+  ctx.fillStyle = "#ffb347";
+  ctx.beginPath();
+  ctx.ellipse(0, 0, cat.size / 2, cat.size / 2.3, 0, 0, Math.PI * 2);
   ctx.fill();
 
+  // Belly
+  ctx.fillStyle = "#ffd59c";
+  ctx.beginPath();
+  ctx.ellipse(0, cat.size * 0.1, cat.size * 0.32, cat.size * 0.28, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Front legs
+  ctx.fillStyle = "#ffb347";
+  for (let i = -1; i <= 1; i += 2) {
+    const phase = i < 0 ? Math.PI : 0;
+    const swing = cat.moving ? Math.sin(cycle + phase) * 4 : 0;
+    ctx.beginPath();
+    ctx.ellipse(i * cat.size * 0.25 - swing * 0.2, cat.size * 0.44, cat.size * 0.16, cat.size * 0.15, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Head
+  ctx.save();
+  ctx.translate(cat.size * 0.26, -cat.size * 0.1);
+  ctx.fillStyle = "#ffb347";
+  ctx.beginPath();
+  ctx.ellipse(0, 0, cat.size * 0.34, cat.size * 0.3, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Ears
+  ctx.fillStyle = "#ffb347";
+  ctx.beginPath();
+  ctx.moveTo(-cat.size * 0.18, -cat.size * 0.22);
+  ctx.lineTo(-cat.size * 0.08, -cat.size * 0.42);
+  ctx.lineTo(0, -cat.size * 0.18);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(cat.size * 0.05, -cat.size * 0.18);
+  ctx.lineTo(cat.size * 0.18, -cat.size * 0.4);
+  ctx.lineTo(cat.size * 0.2, -cat.size * 0.12);
+  ctx.closePath();
+  ctx.fill();
+
+  // Eyes
   ctx.fillStyle = "#14365d";
   ctx.beginPath();
-  ctx.ellipse(-8, -6, 4, 6, 0, 0, Math.PI * 2);
-  ctx.ellipse(8, -6, 4, 6, 0, 0, Math.PI * 2);
+  ctx.ellipse(-cat.size * 0.04, -cat.size * 0.05, cat.size * 0.07, cat.size * 0.09, 0, 0, Math.PI * 2);
+  ctx.ellipse(cat.size * 0.14, -cat.size * 0.05, cat.size * 0.07, cat.size * 0.09, 0, 0, Math.PI * 2);
   ctx.fill();
 
+  // Muzzle
   ctx.fillStyle = "#ffe5b4";
   ctx.beginPath();
-  ctx.arc(0, 6, 8, 0, Math.PI * 2);
+  ctx.arc(cat.size * 0.05, cat.size * 0.05, cat.size * 0.14, 0, Math.PI * 2);
   ctx.fill();
 
+  // Nose and mouth
   ctx.fillStyle = "#ff6f61";
   ctx.beginPath();
-  ctx.arc(0, 10, 5, 0, Math.PI);
+  ctx.moveTo(cat.size * 0.05, cat.size * 0.0);
+  ctx.lineTo(cat.size * 0.02, cat.size * 0.05);
+  ctx.lineTo(cat.size * 0.08, cat.size * 0.05);
+  ctx.closePath();
   ctx.fill();
+
+  ctx.strokeStyle = "#ff6f61";
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(cat.size * 0.05, cat.size * 0.05);
+  ctx.lineTo(cat.size * 0.05, cat.size * 0.09);
+  ctx.moveTo(cat.size * 0.05, cat.size * 0.09);
+  ctx.bezierCurveTo(cat.size * 0.0, cat.size * 0.12, -cat.size * 0.02, cat.size * 0.16, cat.size * 0.02, cat.size * 0.17);
+  ctx.moveTo(cat.size * 0.05, cat.size * 0.09);
+  ctx.bezierCurveTo(cat.size * 0.11, cat.size * 0.12, cat.size * 0.12, cat.size * 0.16, cat.size * 0.08, cat.size * 0.17);
+  ctx.stroke();
+
+  // Whiskers
+  ctx.strokeStyle = "rgba(20, 54, 93, 0.7)";
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(-cat.size * 0.05, cat.size * 0.02);
+  ctx.lineTo(-cat.size * 0.26, -cat.size * 0.03);
+  ctx.moveTo(-cat.size * 0.04, cat.size * 0.07);
+  ctx.lineTo(-cat.size * 0.24, cat.size * 0.12);
+  ctx.moveTo(cat.size * 0.12, cat.size * 0.02);
+  ctx.lineTo(cat.size * 0.32, -cat.size * 0.03);
+  ctx.moveTo(cat.size * 0.13, cat.size * 0.07);
+  ctx.lineTo(cat.size * 0.3, cat.size * 0.12);
+  ctx.stroke();
+
+  ctx.restore();
 
   ctx.restore();
 }
@@ -232,6 +515,7 @@ window.addEventListener("keydown", (event) => {
   if (directionKeys.has(key)) {
     event.preventDefault();
   }
+  ensureAudioActive();
   keys.add(key);
 });
 
@@ -242,6 +526,7 @@ window.addEventListener("keyup", (event) => {
 
 restartBtn.addEventListener("click", () => {
   if (!gameOver) return;
+  ensureAudioActive();
   resetGame();
 });
 
@@ -265,6 +550,7 @@ controlButtons.forEach((button) => {
     const key = directionToKey[direction];
     if (!key) return;
     event.preventDefault();
+    ensureAudioActive();
     if (button.setPointerCapture) {
       button.setPointerCapture(event.pointerId);
     }
@@ -303,6 +589,14 @@ window.addEventListener("blur", () => {
 window.addEventListener("resize", () => {
   updateBoardSize();
 });
+
+window.addEventListener(
+  "pointerdown",
+  () => {
+    ensureAudioActive();
+  },
+  { once: true }
+);
 
 const coarsePointerQuery = typeof window.matchMedia === "function"
   ? window.matchMedia("(pointer: coarse)")
