@@ -56,6 +56,9 @@ class SoundManager {
     this.padOscillators = [];
     this.musicLoopId = null;
     this.lastStepTime = 0;
+    this.loopDuration = 12;
+    this.rhythmGain = null;
+    this.noiseBuffer = null;
   }
 
   init() {
@@ -86,59 +89,163 @@ class SoundManager {
   }
 
   startMusic() {
-    if (!this.enabled || this.padOscillators.length > 0 || this.musicLoopId) {
+    if (!this.enabled || this.musicLoopId) {
       return;
     }
 
     const ctx = this.context;
     const now = ctx.currentTime;
-    const padGain = ctx.createGain();
-    padGain.gain.setValueAtTime(0.0001, now);
-    padGain.gain.exponentialRampToValueAtTime(0.25, now + 4);
-    padGain.connect(this.musicGain);
-
-    const padNotes = [261.63, 329.63, 392.0];
-    padNotes.forEach((frequency, index) => {
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(frequency, now);
-      const gain = ctx.createGain();
-      gain.gain.value = 0.14 / padNotes.length;
-      osc.connect(gain);
-      gain.connect(padGain);
-      osc.start(now + index * 0.05);
-      this.padOscillators.push({ osc, gain });
-    });
-
-    this.musicGain.gain.linearRampToValueAtTime(0.35, now + 6);
-    this.playArpeggio();
+    this.createPadLayer(now);
+    this.musicGain.gain.linearRampToValueAtTime(0.45, now + 3.5);
+    this.playMusicSegment(now);
     this.musicLoopId = window.setInterval(() => {
-      this.playArpeggio();
-    }, 4800);
+      this.playMusicSegment(ctx.currentTime);
+    }, this.loopDuration * 1000);
   }
 
-  playArpeggio() {
+  createPadLayer(startTime) {
+    if (this.padOscillators.length > 0) {
+      return;
+    }
+
+    const ctx = this.context;
+    const padGain = ctx.createGain();
+    padGain.gain.setValueAtTime(0.0001, startTime);
+    padGain.gain.exponentialRampToValueAtTime(0.3, startTime + 5);
+    padGain.connect(this.musicGain);
+
+    const padNotes = [261.63, 329.63, 392.0, 523.25];
+    padNotes.forEach((frequency, index) => {
+      const osc = ctx.createOscillator();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(frequency, startTime);
+      const gain = ctx.createGain();
+      gain.gain.value = 0.12 / padNotes.length;
+      osc.connect(gain);
+      gain.connect(padGain);
+      osc.start(startTime + index * 0.08);
+      this.padOscillators.push({ osc, gain });
+    });
+  }
+
+  ensureNoiseBuffer(duration = 0.35) {
+    if (this.noiseBuffer) {
+      return this.noiseBuffer;
+    }
+    const ctx = this.context;
+    const length = Math.floor(ctx.sampleRate * duration);
+    const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < length; i++) {
+      const fade = 1 - i / length;
+      data[i] = (Math.random() * 2 - 1) * fade * 0.8;
+    }
+    this.noiseBuffer = buffer;
+    return buffer;
+  }
+
+  playMusicSegment(startTime) {
     if (!this.enabled) {
       return;
     }
+
+    this.playBassline(startTime);
+    this.playLead(startTime + 0.25);
+    this.playPercussion(startTime);
+  }
+
+  playBassline(startTime) {
     const ctx = this.context;
-    const pattern = [0, 4, 7, 12, 7, 4];
-    const start = ctx.currentTime;
+    const baseFrequency = 130.81; // C3
+    const pattern = [0, -5, -3, -7, -2, -7, -9, -12];
+    const noteDuration = 0.9;
+
     pattern.forEach((interval, index) => {
+      const time = startTime + index * noteDuration;
       const osc = ctx.createOscillator();
-      osc.type = "triangle";
-      const time = start + index * 0.4;
-      const frequency = 261.63 * Math.pow(2, interval / 12);
-      osc.frequency.setValueAtTime(frequency, time);
+      osc.type = "sawtooth";
+      const freq = baseFrequency * Math.pow(2, interval / 12);
+      osc.frequency.setValueAtTime(freq, time);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.98, time + noteDuration * 0.9);
+
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(0.0001, time);
-      gain.gain.exponentialRampToValueAtTime(0.06, time + 0.08);
-      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.32);
+      gain.gain.exponentialRampToValueAtTime(0.16, time + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + noteDuration * 0.95);
+
       osc.connect(gain);
       gain.connect(this.musicGain);
       osc.start(time);
-      osc.stop(time + 0.45);
+      osc.stop(time + noteDuration);
     });
+  }
+
+  playLead(startTime) {
+    const ctx = this.context;
+    const melody = [0, 4, 7, 12, 14, 12, 7, 4, 2, 4, 7, 9];
+    const spacing = 0.4;
+
+    melody.forEach((interval, index) => {
+      const time = startTime + index * spacing;
+      const osc = ctx.createOscillator();
+      osc.type = "triangle";
+      const frequency = 261.63 * Math.pow(2, interval / 12);
+      osc.frequency.setValueAtTime(frequency, time);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, time);
+      gain.gain.exponentialRampToValueAtTime(0.08, time + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + spacing * 0.9);
+
+      const vibrato = ctx.createOscillator();
+      vibrato.type = "sine";
+      vibrato.frequency.setValueAtTime(6, time);
+      const vibratoGain = ctx.createGain();
+      vibratoGain.gain.setValueAtTime(3, time);
+      vibrato.connect(vibratoGain);
+      vibratoGain.connect(osc.frequency);
+
+      osc.connect(gain);
+      gain.connect(this.musicGain);
+      osc.start(time);
+      osc.stop(time + spacing * 1.1);
+      vibrato.start(time);
+      vibrato.stop(time + spacing * 1.1);
+    });
+  }
+
+  playPercussion(startTime) {
+    const ctx = this.context;
+    const beatSpacing = 0.6;
+    const hits = 8;
+
+    if (!this.rhythmGain) {
+      this.rhythmGain = ctx.createGain();
+      this.rhythmGain.gain.value = 0.6;
+      this.rhythmGain.connect(this.musicGain);
+    }
+
+    for (let i = 0; i < hits; i++) {
+      const time = startTime + i * beatSpacing;
+      const bufferSource = ctx.createBufferSource();
+      bufferSource.buffer = this.ensureNoiseBuffer();
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = "bandpass";
+      filter.frequency.setValueAtTime(i % 2 === 0 ? 1400 : 900, time);
+      filter.Q.setValueAtTime(6, time);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, time);
+      gain.gain.exponentialRampToValueAtTime(i % 2 === 0 ? 0.45 : 0.25, time + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.25);
+
+      bufferSource.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.rhythmGain);
+      bufferSource.start(time);
+      bufferSource.stop(time + 0.3);
+    }
   }
 
   playCatch() {
@@ -147,18 +254,39 @@ class SoundManager {
     }
     const ctx = this.context;
     const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(660, now);
-    osc.frequency.exponentialRampToValueAtTime(1320, now + 0.2);
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.4, now + 0.03);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
-    osc.connect(gain);
-    gain.connect(this.sfxGain);
-    osc.start(now);
-    osc.stop(now + 0.4);
+    const clickOsc = ctx.createOscillator();
+    clickOsc.type = "sine";
+    clickOsc.frequency.setValueAtTime(820, now);
+    clickOsc.frequency.exponentialRampToValueAtTime(420, now + 0.18);
+
+    const clickGain = ctx.createGain();
+    clickGain.gain.setValueAtTime(0.0001, now);
+    clickGain.gain.exponentialRampToValueAtTime(0.32, now + 0.04);
+    clickGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
+
+    clickOsc.connect(clickGain);
+    clickGain.connect(this.sfxGain);
+
+    const splash = ctx.createBufferSource();
+    splash.buffer = this.ensureNoiseBuffer(0.25);
+    const splashFilter = ctx.createBiquadFilter();
+    splashFilter.type = "bandpass";
+    splashFilter.frequency.setValueAtTime(900, now);
+    splashFilter.Q.setValueAtTime(5.5, now);
+
+    const splashGain = ctx.createGain();
+    splashGain.gain.setValueAtTime(0.0001, now);
+    splashGain.gain.exponentialRampToValueAtTime(0.6, now + 0.03);
+    splashGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+
+    splash.connect(splashFilter);
+    splashFilter.connect(splashGain);
+    splashGain.connect(this.sfxGain);
+
+    clickOsc.start(now);
+    clickOsc.stop(now + 0.35);
+    splash.start(now);
+    splash.stop(now + 0.35);
   }
 
   playStep() {

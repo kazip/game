@@ -4,7 +4,32 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Котик ловит рыбку</title>
-  <link rel="stylesheet" href="styles.css">
+  <meta name="build-version" content="2024-06-02T20:00:00Z">
+  <script>
+    (function () {
+      const versionMeta = document.querySelector('meta[name="build-version"]');
+      const cacheTag = versionMeta ? versionMeta.content.trim() : Date.now().toString();
+
+      const appendAsset = (tagName, attributes) => {
+        const element = document.createElement(tagName);
+        Object.entries(attributes).forEach(([key, value]) => {
+          element.setAttribute(key, value);
+        });
+        document.head.appendChild(element);
+        return element;
+      };
+
+      appendAsset('link', {
+        rel: 'stylesheet',
+        href: `styles.css?v=${cacheTag}`,
+      });
+
+      appendAsset('script', {
+        src: `game.js?v=${cacheTag}`,
+        defer: 'defer',
+      });
+    })();
+  </script>
 </head>
 <body>
   <div class="game-container">
@@ -29,6 +54,5 @@
     <div id="message" role="status"></div>
     <button id="restart" type="button">Играть снова</button>
   </div>
-  <script src="game.js"></script>
 </body>
 </html>
