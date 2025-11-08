@@ -3,6 +3,10 @@
   font-family: "Segoe UI", Arial, sans-serif;
 }
 
+:root {
+  --board-size: 500px;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -15,6 +19,8 @@ body {
 }
 
 .game-container {
+  display: grid;
+  gap: 18px;
   text-align: center;
   background: rgba(255, 255, 255, 0.85);
   padding: 24px;
@@ -32,21 +38,28 @@ h1 {
   display: flex;
   gap: 24px;
   justify-content: center;
-  margin-bottom: 12px;
   font-size: 1.1rem;
+}
+
+.playfield {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  width: min(100%, var(--board-size, 500px));
+  margin: 0 auto;
 }
 
 canvas {
   border: 4px solid #14365d;
   border-radius: 12px;
   background: #e5f7ff;
-  width: min(88vw, 500px);
-  height: min(88vw, 500px);
+  display: block;
+  width: min(100%, var(--board-size, 500px));
+  aspect-ratio: 1 / 1;
   touch-action: none;
 }
 
 #message {
-  margin-top: 16px;
   font-size: 1.2rem;
   min-height: 1.5em;
 }
@@ -56,7 +69,6 @@ canvas {
 }
 
 #restart {
-  margin-top: 12px;
   padding: 10px 20px;
   font-size: 1rem;
   border: none;
@@ -82,34 +94,42 @@ canvas {
 
 .controls {
   display: none;
-  margin: 18px auto 0;
-  max-width: 260px;
-  gap: 10px;
+  width: min(100%, var(--board-size, 500px));
+  gap: 12px;
+  margin: 0 auto;
+  justify-items: center;
 }
 
 .controls-row {
   display: flex;
   justify-content: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .control-btn {
-  width: 64px;
-  height: 64px;
+  width: clamp(60px, 18vw, 84px);
+  height: clamp(60px, 18vw, 84px);
   border-radius: 16px;
   border: none;
   background: rgba(249, 168, 38, 0.9);
   color: #14365d;
-  font-size: 1.6rem;
+  font-size: clamp(1.4rem, 6vw, 1.8rem);
   cursor: pointer;
   box-shadow: 0 6px 18px rgba(249, 168, 38, 0.35);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
+  touch-action: none;
+  user-select: none;
 }
 
 .control-btn:active,
 .control-btn.active {
   transform: translateY(1px) scale(0.98);
   box-shadow: 0 3px 12px rgba(249, 168, 38, 0.4);
+}
+
+.control-btn:focus-visible {
+  outline: 3px solid rgba(20, 54, 93, 0.45);
+  outline-offset: 2px;
 }
 
 @media (max-width: 768px) {
@@ -137,5 +157,23 @@ canvas {
 
   .controls {
     display: grid;
+  }
+}
+
+@media (pointer: coarse) {
+  .controls {
+    display: grid;
+  }
+}
+
+@media (max-height: 640px) {
+  body {
+    align-items: flex-start;
+    padding: 8px;
+  }
+
+  .game-container {
+    margin-top: 12px;
+    padding: 18px 14px;
   }
 }
