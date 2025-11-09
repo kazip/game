@@ -35,16 +35,18 @@ const restartBtn = document.getElementById("restart");
 const scoreEl = document.getElementById("score");
 const timerEl = document.getElementById("timer");
 const controlsContainer = document.querySelector(".controls");
-const controlButtons = document.querySelectorAll(".control-btn");
+const joystickBase = document.querySelector(".joystick-base");
+const joystickThumb = document.querySelector(".joystick-thumb");
 
-const pointerState = new Map();
-const directionToKey = {
-  up: "ArrowUp",
-  down: "ArrowDown",
-  left: "ArrowLeft",
-  right: "ArrowRight"
-};
-const directionKeys = new Set(Object.values(directionToKey));
+const directionKeys = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight"
+]);
+const JOYSTICK_DEADZONE = 0.22;
+let joystickPointerId = null;
+const joystickVector = { x: 0, y: 0 };
 
 class SoundManager {
   constructor() {
@@ -56,7 +58,7 @@ class SoundManager {
     this.padOscillators = [];
     this.musicLoopId = null;
     this.lastStepTime = 0;
-    this.loopDuration = 12;
+    this.loopDuration = 16;
     this.rhythmGain = null;
     this.noiseBuffer = null;
   }
@@ -89,18 +91,69 @@ class SoundManager {
   }
 
   startMusic() {
-    if (!this.enabled || this.musicLoopId) {
+    if (!this.enabled) {
       return;
     }
 
     const ctx = this.context;
     const now = ctx.currentTime;
+    if (this.musicLoopId) {
+      window.clearInterval(this.musicLoopId);
+      this.musicLoopId = null;
+    }
+    this.musicGain.gain.cancelScheduledValues(now);
+    const currentGain = Math.max(this.musicGain.gain.value, 0.0001);
+    this.musicGain.gain.setValueAtTime(currentGain, now);
+    this.musicGain.gain.linearRampToValueAtTime(0.48, now + 2.5);
     this.createPadLayer(now);
-    this.musicGain.gain.linearRampToValueAtTime(0.45, now + 3.5);
     this.playMusicSegment(now);
     this.musicLoopId = window.setInterval(() => {
       this.playMusicSegment(ctx.currentTime);
     }, this.loopDuration * 1000);
+  }
+
+  stopMusic(fadeDuration = 0.6) {
+    if (!this.enabled || !this.context) {
+      return;
+    }
+
+    if (this.musicLoopId) {
+      window.clearInterval(this.musicLoopId);
+      this.musicLoopId = null;
+    }
+
+    const ctx = this.context;
+    const now = ctx.currentTime;
+    this.musicGain.gain.cancelScheduledValues(now);
+    this.musicGain.gain.setValueAtTime(
+      Math.max(this.musicGain.gain.value, 0.0001),
+      now
+    );
+    this.musicGain.gain.linearRampToValueAtTime(0.0001, now + fadeDuration);
+
+    if (this.rhythmGain) {
+      this.rhythmGain.gain.cancelScheduledValues(now);
+      this.rhythmGain.gain.setValueAtTime(
+        Math.max(this.rhythmGain.gain.value, 0.0001),
+        now
+      );
+      this.rhythmGain.gain.linearRampToValueAtTime(
+        0.0001,
+        now + fadeDuration * 0.8
+      );
+    }
+
+    this.padOscillators.forEach(({ osc, gain }) => {
+      try {
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setValueAtTime(Math.max(gain.gain.value, 0.0001), now);
+        gain.gain.linearRampToValueAtTime(0.0001, now + fadeDuration);
+        osc.stop(now + fadeDuration + 0.2);
+      } catch (error) {
+        // Ignored
+      }
+    });
+    this.padOscillators = [];
   }
 
   createPadLayer(startTime) {
@@ -111,19 +164,19 @@ class SoundManager {
     const ctx = this.context;
     const padGain = ctx.createGain();
     padGain.gain.setValueAtTime(0.0001, startTime);
-    padGain.gain.exponentialRampToValueAtTime(0.3, startTime + 5);
+    padGain.gain.exponentialRampToValueAtTime(0.32, startTime + 4.2);
     padGain.connect(this.musicGain);
 
-    const padNotes = [261.63, 329.63, 392.0, 523.25];
+    const padNotes = [220.0, 329.63, 440.0];
     padNotes.forEach((frequency, index) => {
       const osc = ctx.createOscillator();
-      osc.type = "triangle";
+      osc.type = index % 2 === 0 ? "triangle" : "sawtooth";
       osc.frequency.setValueAtTime(frequency, startTime);
       const gain = ctx.createGain();
-      gain.gain.value = 0.12 / padNotes.length;
+      gain.gain.value = 0.14 / padNotes.length;
       osc.connect(gain);
       gain.connect(padGain);
-      osc.start(startTime + index * 0.08);
+      osc.start(startTime + index * 0.12);
       this.padOscillators.push({ osc, gain });
     });
   }
@@ -149,79 +202,151 @@ class SoundManager {
       return;
     }
 
-    this.playBassline(startTime);
+    this.playProgression(startTime);
     this.playLead(startTime + 0.25);
+    this.playPulseLayer(startTime);
     this.playPercussion(startTime);
   }
 
-  playBassline(startTime) {
+  playProgression(startTime) {
     const ctx = this.context;
-    const baseFrequency = 130.81; // C3
-    const pattern = [0, -5, -3, -7, -2, -7, -9, -12];
-    const noteDuration = 0.9;
+    const chords = [
+      { root: 220.0, type: "minor" },
+      { root: 261.63, type: "major" },
+      { root: 196.0, type: "major" },
+      { root: 293.66, type: "minor" }
+    ];
+    const chordDuration = this.loopDuration / chords.length;
 
-    pattern.forEach((interval, index) => {
-      const time = startTime + index * noteDuration;
-      const osc = ctx.createOscillator();
-      osc.type = "sawtooth";
-      const freq = baseFrequency * Math.pow(2, interval / 12);
-      osc.frequency.setValueAtTime(freq, time);
-      osc.frequency.exponentialRampToValueAtTime(freq * 0.98, time + noteDuration * 0.9);
+    chords.forEach((chord, chordIndex) => {
+      const chordStart = startTime + chordIndex * chordDuration;
+      const chordIntervals = chord.type === "minor" ? [0, 3, 7, 12] : [0, 4, 7, 12];
+      chordIntervals.forEach((interval, voiceIndex) => {
+        const osc = ctx.createOscillator();
+        osc.type = voiceIndex % 2 === 0 ? "triangle" : "sine";
+        const frequency = chord.root * Math.pow(2, interval / 12);
+        osc.frequency.setValueAtTime(frequency, chordStart);
 
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.0001, time);
-      gain.gain.exponentialRampToValueAtTime(0.16, time + 0.05);
-      gain.gain.exponentialRampToValueAtTime(0.0001, time + noteDuration * 0.95);
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, chordStart);
+        gain.gain.linearRampToValueAtTime(
+          0.18 / chordIntervals.length,
+          chordStart + 0.6
+        );
+        gain.gain.linearRampToValueAtTime(
+          0.0001,
+          chordStart + chordDuration * 0.95
+        );
 
-      osc.connect(gain);
-      gain.connect(this.musicGain);
-      osc.start(time);
-      osc.stop(time + noteDuration);
+        osc.connect(gain);
+        gain.connect(this.musicGain);
+        osc.start(chordStart);
+        osc.stop(chordStart + chordDuration + 1.2);
+      });
+    });
+  }
+
+  playPulseLayer(startTime) {
+    const ctx = this.context;
+    const chords = [
+      440.0,
+      523.25,
+      392.0,
+      587.33
+    ];
+    const chordDuration = this.loopDuration / chords.length;
+    const pulsesPerChord = 8;
+
+    chords.forEach((baseFrequency, chordIndex) => {
+      const stepDuration = chordDuration / pulsesPerChord;
+      for (let i = 0; i < pulsesPerChord; i += 1) {
+        const time = startTime + chordIndex * chordDuration + i * stepDuration;
+        const osc = ctx.createOscillator();
+        osc.type = "sawtooth";
+        const interval = i % 2 === 0 ? 0 : 7;
+        const frequency = baseFrequency * Math.pow(2, interval / 12);
+        osc.frequency.setValueAtTime(frequency, time);
+
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, time);
+        gain.gain.exponentialRampToValueAtTime(0.16, time + 0.06);
+        gain.gain.exponentialRampToValueAtTime(0.0001, time + stepDuration * 0.9);
+
+        const filter = ctx.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.setValueAtTime(1600, time);
+        filter.Q.setValueAtTime(3.5, time);
+
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.musicGain);
+        osc.start(time);
+        osc.stop(time + stepDuration * 1.2);
+      }
     });
   }
 
   playLead(startTime) {
     const ctx = this.context;
-    const melody = [0, 4, 7, 12, 14, 12, 7, 4, 2, 4, 7, 9];
-    const spacing = 0.4;
+    const baseFrequency = 440.0; // A4
+    const melody = [
+      { interval: 0, duration: 0.5 },
+      { interval: 3, duration: 0.5 },
+      { interval: 7, duration: 0.5 },
+      { interval: 10, duration: 0.5 },
+      { interval: 12, duration: 0.75 },
+      { interval: 10, duration: 0.25 },
+      { interval: 7, duration: 0.5 },
+      { interval: 3, duration: 0.5 },
+      { interval: 0, duration: 0.75 },
+      { interval: 3, duration: 0.25 },
+      { interval: -2, duration: 0.5 },
+      { interval: 0, duration: 0.5 },
+      { interval: 3, duration: 0.5 },
+      { interval: 7, duration: 0.5 },
+      { interval: 10, duration: 1.0 },
+      { interval: 7, duration: 1.0 }
+    ];
 
-    melody.forEach((interval, index) => {
-      const time = startTime + index * spacing;
+    let currentTime = startTime;
+    melody.forEach(({ interval, duration }) => {
       const osc = ctx.createOscillator();
       osc.type = "triangle";
-      const frequency = 261.63 * Math.pow(2, interval / 12);
-      osc.frequency.setValueAtTime(frequency, time);
+      const frequency = baseFrequency * Math.pow(2, interval / 12);
+      osc.frequency.setValueAtTime(frequency, currentTime);
 
       const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.0001, time);
-      gain.gain.exponentialRampToValueAtTime(0.08, time + 0.05);
-      gain.gain.exponentialRampToValueAtTime(0.0001, time + spacing * 0.9);
+      gain.gain.setValueAtTime(0.0001, currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.09, currentTime + 0.07);
+      gain.gain.exponentialRampToValueAtTime(0.0001, currentTime + duration * 0.92);
 
       const vibrato = ctx.createOscillator();
       vibrato.type = "sine";
-      vibrato.frequency.setValueAtTime(6, time);
+      vibrato.frequency.setValueAtTime(5.8, currentTime);
       const vibratoGain = ctx.createGain();
-      vibratoGain.gain.setValueAtTime(3, time);
+      vibratoGain.gain.setValueAtTime(4.2, currentTime);
       vibrato.connect(vibratoGain);
       vibratoGain.connect(osc.frequency);
 
       osc.connect(gain);
       gain.connect(this.musicGain);
-      osc.start(time);
-      osc.stop(time + spacing * 1.1);
-      vibrato.start(time);
-      vibrato.stop(time + spacing * 1.1);
+      osc.start(currentTime);
+      osc.stop(currentTime + duration + 0.4);
+      vibrato.start(currentTime);
+      vibrato.stop(currentTime + duration + 0.4);
+
+      currentTime += duration;
     });
   }
 
   playPercussion(startTime) {
     const ctx = this.context;
-    const beatSpacing = 0.6;
-    const hits = 8;
+    const beatSpacing = 0.5;
+    const hits = Math.floor(this.loopDuration / beatSpacing);
 
     if (!this.rhythmGain) {
       this.rhythmGain = ctx.createGain();
-      this.rhythmGain.gain.value = 0.6;
+      this.rhythmGain.gain.value = 0.5;
       this.rhythmGain.connect(this.musicGain);
     }
 
@@ -232,19 +357,35 @@ class SoundManager {
 
       const filter = ctx.createBiquadFilter();
       filter.type = "bandpass";
-      filter.frequency.setValueAtTime(i % 2 === 0 ? 1400 : 900, time);
-      filter.Q.setValueAtTime(6, time);
+      filter.frequency.setValueAtTime(i % 2 === 0 ? 1200 : 900, time);
+      filter.Q.setValueAtTime(5.5, time);
 
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(0.0001, time);
-      gain.gain.exponentialRampToValueAtTime(i % 2 === 0 ? 0.45 : 0.25, time + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.25);
+      const accent = i % 4 === 0 ? 0.55 : i % 2 === 0 ? 0.32 : 0.2;
+      gain.gain.exponentialRampToValueAtTime(accent, time + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.24);
 
       bufferSource.connect(filter);
       filter.connect(gain);
       gain.connect(this.rhythmGain);
       bufferSource.start(time);
       bufferSource.stop(time + 0.3);
+
+      if (i % 4 === 0) {
+        const lowOsc = ctx.createOscillator();
+        lowOsc.type = "sine";
+        lowOsc.frequency.setValueAtTime(90, time);
+        lowOsc.frequency.linearRampToValueAtTime(70, time + 0.25);
+        const lowGain = ctx.createGain();
+        lowGain.gain.setValueAtTime(0.0001, time);
+        lowGain.gain.exponentialRampToValueAtTime(0.22, time + 0.04);
+        lowGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.4);
+        lowOsc.connect(lowGain);
+        lowGain.connect(this.rhythmGain);
+        lowOsc.start(time);
+        lowOsc.stop(time + 0.5);
+      }
     }
   }
 
@@ -338,6 +479,73 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function updateJoystickThumbPosition() {
+  if (!joystickBase || !joystickThumb) {
+    return;
+  }
+  const maxOffsetX = (joystickBase.clientWidth - joystickThumb.clientWidth) / 2;
+  const maxOffsetY = (joystickBase.clientHeight - joystickThumb.clientHeight) / 2;
+  const offsetX = joystickVector.x * maxOffsetX;
+  const offsetY = joystickVector.y * maxOffsetY;
+  joystickThumb.style.setProperty("--offset-x", `${offsetX}px`);
+  joystickThumb.style.setProperty("--offset-y", `${offsetY}px`);
+}
+
+function setJoystickVector(rawX, rawY, { bypassDeadzone = false } = {}) {
+  if (!joystickBase) {
+    joystickVector.x = 0;
+    joystickVector.y = 0;
+    return;
+  }
+
+  const x = clamp(rawX, -1, 1);
+  const y = clamp(rawY, -1, 1);
+
+  if (bypassDeadzone) {
+    joystickVector.x = x;
+    joystickVector.y = y;
+  } else {
+    const magnitude = Math.hypot(x, y);
+    if (magnitude < JOYSTICK_DEADZONE) {
+      joystickVector.x = 0;
+      joystickVector.y = 0;
+    } else {
+      const normalizedX = x / (magnitude || 1);
+      const normalizedY = y / (magnitude || 1);
+      const clampedMagnitude = Math.min(magnitude, 1);
+      const scaledMagnitude =
+        (clampedMagnitude - JOYSTICK_DEADZONE) / (1 - JOYSTICK_DEADZONE);
+      const finalMagnitude = clamp(scaledMagnitude, 0, 1);
+      joystickVector.x = normalizedX * finalMagnitude;
+      joystickVector.y = normalizedY * finalMagnitude;
+    }
+  }
+
+  updateJoystickThumbPosition();
+}
+
+function updateJoystickFromEvent(event) {
+  if (!joystickBase) {
+    return;
+  }
+  const rect = joystickBase.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) {
+    setJoystickVector(0, 0, { bypassDeadzone: true });
+    return;
+  }
+  const relativeX = (event.clientX - (rect.left + rect.width / 2)) / (rect.width / 2);
+  const relativeY = (event.clientY - (rect.top + rect.height / 2)) / (rect.height / 2);
+  setJoystickVector(relativeX, relativeY);
+}
+
+function resetJoystick() {
+  joystickPointerId = null;
+  if (joystickBase) {
+    joystickBase.classList.remove("dragging");
+  }
+  setJoystickVector(0, 0, { bypassDeadzone: true });
+}
+
 function updateBoardSize() {
   if (!gameContainer) {
     return;
@@ -372,6 +580,7 @@ function updateBoardSize() {
   }
 
   document.documentElement.style.setProperty("--board-size", `${boardSize}px`);
+  updateJoystickThumbPosition();
 }
 
 function spawnFish() {
@@ -396,6 +605,9 @@ function resetGame() {
   cat.stepAccumulator = 0;
   cat.facing = 1;
   spawnFish();
+  if (soundManager.enabled) {
+    soundManager.startMusic();
+  }
   lastTimestamp = performance.now();
   requestAnimationFrame(loop);
 }
@@ -406,29 +618,34 @@ function endGame(reason) {
   restartBtn.disabled = false;
   messageEl.textContent = reason + ` Результат: ${score}.`;
   updateBoardSize();
+  soundManager.stopMusic(0.8);
 }
 
 function update(delta) {
-  const horizontalInput =
+  let horizontalInput =
     (keys.has("ArrowRight") || keys.has("d") ? 1 : 0) -
     (keys.has("ArrowLeft") || keys.has("a") ? 1 : 0);
-  const verticalInput =
+  let verticalInput =
     (keys.has("ArrowDown") || keys.has("s") ? 1 : 0) -
     (keys.has("ArrowUp") || keys.has("w") ? 1 : 0);
 
-  const hasInput = horizontalInput !== 0 || verticalInput !== 0;
+  horizontalInput += joystickVector.x;
+  verticalInput += joystickVector.y;
+
+  const length = Math.hypot(horizontalInput, verticalInput);
+  const hasInput = length > 0.001;
   if (hasInput) {
-    const length = Math.hypot(horizontalInput, verticalInput) || 1;
-    const normalizedX = horizontalInput / length;
-    const normalizedY = verticalInput / length;
-    const distance = cat.speed * delta;
+    const cappedMagnitude = Math.min(length, 1);
+    const normalizedX = horizontalInput / (length || 1);
+    const normalizedY = verticalInput / (length || 1);
+    const distance = cat.speed * delta * cappedMagnitude;
     cat.x += normalizedX * distance;
     cat.y += normalizedY * distance;
     cat.moving = true;
     if (Math.abs(normalizedX) > 0.1) {
       cat.facing = normalizedX >= 0 ? 1 : -1;
     }
-    const walkIncrement = delta * WALK_FREQUENCY;
+    const walkIncrement = delta * WALK_FREQUENCY * cappedMagnitude;
     cat.walkCycle = (cat.walkCycle + walkIncrement) % 1;
     cat.stepAccumulator += walkIncrement;
     while (cat.stepAccumulator >= 0.5) {
@@ -658,64 +875,78 @@ restartBtn.addEventListener("click", () => {
   resetGame();
 });
 
-function activatePointer(button, key, pointerId) {
-  keys.add(key);
-  button.classList.add("active");
-  pointerState.set(pointerId, { key, button });
-}
-
-function deactivatePointer(pointerId) {
-  const state = pointerState.get(pointerId);
-  if (!state) return;
-  keys.delete(state.key);
-  state.button.classList.remove("active");
-  pointerState.delete(pointerId);
-}
-
-controlButtons.forEach((button) => {
-  button.addEventListener("pointerdown", (event) => {
-    const direction = button.dataset.direction;
-    const key = directionToKey[direction];
-    if (!key) return;
+if (joystickBase) {
+  const handlePointerMove = (event) => {
+    if (joystickPointerId !== event.pointerId) {
+      return;
+    }
     event.preventDefault();
+    updateJoystickFromEvent(event);
+  };
+
+  joystickBase.addEventListener("pointerdown", (event) => {
+    if (joystickPointerId !== null && joystickPointerId !== event.pointerId) {
+      return;
+    }
+    joystickPointerId = event.pointerId;
     ensureAudioActive();
-    if (button.setPointerCapture) {
-      button.setPointerCapture(event.pointerId);
+    joystickBase.classList.add("dragging");
+    if (joystickBase.setPointerCapture) {
+      joystickBase.setPointerCapture(event.pointerId);
     }
-    activatePointer(button, key, event.pointerId);
-  });
-
-  button.addEventListener("pointerup", (event) => {
-    event.preventDefault();
-    if (button.releasePointerCapture) {
-      button.releasePointerCapture(event.pointerId);
-    }
-    deactivatePointer(event.pointerId);
-  });
-
-  button.addEventListener("pointercancel", (event) => {
-    deactivatePointer(event.pointerId);
-  });
-
-  button.addEventListener("lostpointercapture", (event) => {
-    deactivatePointer(event.pointerId);
-  });
-
-  button.addEventListener("contextmenu", (event) => {
+    updateJoystickFromEvent(event);
     event.preventDefault();
   });
-});
+
+  joystickBase.addEventListener("pointermove", handlePointerMove);
+
+  const finishPointerInteraction = (event) => {
+    if (joystickPointerId !== event.pointerId) {
+      return;
+    }
+    if (joystickBase.releasePointerCapture) {
+      joystickBase.releasePointerCapture(event.pointerId);
+    }
+    resetJoystick();
+  };
+
+  joystickBase.addEventListener("pointerup", (event) => {
+    event.preventDefault();
+    finishPointerInteraction(event);
+  });
+
+  joystickBase.addEventListener("pointercancel", (event) => {
+    event.preventDefault();
+    finishPointerInteraction(event);
+  });
+
+  joystickBase.addEventListener("lostpointercapture", () => {
+    resetJoystick();
+  });
+
+  joystickBase.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+  });
+}
 
 window.addEventListener("blur", () => {
   keys.clear();
-  pointerState.forEach(({ button }) => {
-    button.classList.remove("active");
-  });
-  pointerState.clear();
+  resetJoystick();
 });
 
 window.addEventListener("resize", () => {
   updateBoardSize();
+  updateJoystickThumbPosition();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    keys.clear();
+    resetJoystick();
+    soundManager.stopMusic(0.4);
+  } else if (!gameOver && soundManager.enabled) {
+    soundManager.startMusic();
+  }
 });
 
 window.addEventListener(
@@ -738,4 +969,5 @@ if (coarsePointerQuery) {
 }
 
 // Запуск игры при загрузке страницы
+resetJoystick();
 resetGame();
