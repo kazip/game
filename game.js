@@ -43,6 +43,12 @@ const powerUp = {
 
 let walls = [];
 
+const mines = [];
+
+const MAX_MINES = 3;
+const MINE_SIZE = 26;
+const MINE_MIN_DISTANCE = 5;
+
 const POWER_UP_CHANCE = 0.05;
 const POWER_UP_LIFETIME = 5;
 const POWER_UP_DURATION = 30;
@@ -289,6 +295,73 @@ function spawnPowerUp() {
   }
   powerUp.active = false;
   powerUp.remaining = 0;
+}
+
+function clearMines() {
+  mines.length = 0;
+}
+
+function isMinePositionValid(x, y, radius) {
+  const safeRadius = radius + MINE_MIN_DISTANCE;
+
+  if (
+    x - safeRadius < 0 ||
+    y - safeRadius < 0 ||
+    x + safeRadius > WORLD_SIZE ||
+    y + safeRadius > WORLD_SIZE
+  ) {
+    return false;
+  }
+
+  if (circleIntersectsAnyWall(x, y, safeRadius)) {
+    return false;
+  }
+
+  const distanceToCat = Math.hypot(x - cat.x, y - cat.y);
+  if (distanceToCat <= cat.size / 2 + safeRadius) {
+    return false;
+  }
+
+  if (fish.alive) {
+    const distanceToFish = Math.hypot(x - fish.x, y - fish.y);
+    if (distanceToFish <= fish.size / 2 + safeRadius) {
+      return false;
+    }
+  }
+
+  for (const mine of mines) {
+    const distanceToMine = Math.hypot(x - mine.x, y - mine.y);
+    if (distanceToMine <= mine.size / 2 + radius + MINE_MIN_DISTANCE) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function spawnMines() {
+  clearMines();
+
+  const mineCount = Math.floor(Math.random() * (MAX_MINES + 1));
+  if (mineCount === 0) {
+    return;
+  }
+
+  const radius = MINE_SIZE / 2;
+  const margin = radius + MINE_MIN_DISTANCE + 4;
+  let attempts = 0;
+
+  while (mines.length < mineCount && attempts < 200) {
+    attempts += 1;
+    const candidateX = margin + Math.random() * (WORLD_SIZE - margin * 2);
+    const candidateY = margin + Math.random() * (WORLD_SIZE - margin * 2);
+
+    if (!isMinePositionValid(candidateX, candidateY, radius)) {
+      continue;
+    }
+
+    mines.push({ x: candidateX, y: candidateY, size: MINE_SIZE });
+  }
 }
 
 function maybeSpawnPowerUp() {
@@ -1195,6 +1268,7 @@ function spawnFish() {
 
   fish.alive = true;
   remaining = getFishTimeLimitForFish(fish.type);
+  spawnMines();
   maybeSpawnPowerUp();
 }
 
@@ -1217,6 +1291,7 @@ function resetGame() {
   powerUp.active = false;
   powerUp.remaining = 0;
   clearStatusEffect();
+  clearMines();
   spawnFish();
   if (soundManager.enabled) {
     soundManager.startMusic();
@@ -1316,6 +1391,14 @@ function update(delta) {
       goldenChainActive = isGoldenFish;
       spawnFish();
       soundManager.playCatch();
+    }
+  }
+
+  for (const mine of mines) {
+    const distanceToMine = Math.hypot(cat.x - mine.x, cat.y - mine.y);
+    if (distanceToMine < (cat.size + mine.size) / 2) {
+      endGame("Котик подорвался на мине!");
+      return;
     }
   }
 
@@ -1560,6 +1643,43 @@ function drawPowerUp() {
   ctx.restore();
 }
 
+function drawMines() {
+  if (mines.length === 0) {
+    return;
+  }
+
+  ctx.save();
+  mines.forEach((mine) => {
+    ctx.save();
+    ctx.translate(mine.x, mine.y);
+    const radius = mine.size / 2;
+
+    const gradient = ctx.createRadialGradient(0, 0, radius * 0.3, 0, 0, radius);
+    gradient.addColorStop(0, "#ff5252");
+    gradient.addColorStop(1, "#5a1b1b");
+
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "#2b0d0d";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let i = 0; i < 8; i += 1) {
+      const angle = (i / 8) * Math.PI * 2;
+      const inner = radius * 0.3;
+      const outer = radius * 1.1;
+      ctx.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
+      ctx.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
+    }
+    ctx.stroke();
+
+    ctx.restore();
+  });
+  ctx.restore();
+}
+
 function loop(timestamp) {
   if (gameOver) return;
 
@@ -1568,6 +1688,7 @@ function loop(timestamp) {
   prepareCanvasForFrame();
   update(delta);
   drawWalls();
+  drawMines();
   drawPowerUp();
   drawFish();
   drawCat();
