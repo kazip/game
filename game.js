@@ -47,7 +47,7 @@ const mines = [];
 
 const MAX_MINES = 3;
 const MINE_SIZE = 26;
-const MINE_MIN_DISTANCE = 5;
+const MINE_MIN_DISTANCE = 25;
 
 const POWER_UP_CHANCE = 0.05;
 const POWER_UP_LIFETIME = 5;
