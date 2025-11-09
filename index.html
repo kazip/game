@@ -37,6 +37,15 @@
     <div class="hud">
       <div>Очки: <span id="score">0</span></div>
       <div>Время: <span id="timer">10.0</span> c</div>
+      <div class="status-effect" aria-live="polite">
+        <span class="status-effect-label">Эффект:</span>
+        <span
+          id="status-effect-icon"
+          class="status-effect-icon"
+          role="img"
+          aria-label="Нет эффектов"
+        >—</span>
+      </div>
     </div>
     <div class="playfield">
       <canvas id="game" width="500" height="500" aria-label="Игровое поле"></canvas>

@@ -29,6 +29,41 @@ const fish = {
   type: "normal"
 };
 
+const powerUp = {
+  x: 0,
+  y: 0,
+  size: 34,
+  active: false,
+  remaining: 0
+};
+
+const POWER_UP_CHANCE = 0.05;
+const POWER_UP_LIFETIME = 5;
+const POWER_UP_DURATION = 30;
+
+const STATUS_EFFECTS = {
+  speedUp: {
+    icon: "👢",
+    label: "Ускорение: котик передвигается в два раза быстрее"
+  },
+  timeIncrease: {
+    icon: "🕒⬆️",
+    label: "Увеличение времени: на поимку рыбки выделяется 15 секунд"
+  },
+  speedDown: {
+    icon: "🧪",
+    label: "Замедление: котик передвигается в полтора раза медленнее"
+  },
+  timeDecrease: {
+    icon: "🕒⬇️",
+    label: "Уменьшение времени: на поимку рыбки выделяется 5 секунд"
+  }
+};
+
+const STATUS_EFFECT_TYPES = Object.keys(STATUS_EFFECTS);
+
+let activeStatusEffect = null;
+
 const keys = new Set();
 const NORMAL_FISH_TIME_LIMIT = 10;
 const NORMAL_FISH_POINTS = 1;
@@ -48,6 +83,7 @@ const timerEl = document.getElementById("timer");
 const controlsContainer = document.querySelector(".controls");
 const joystickBase = document.querySelector(".joystick-base");
 const joystickThumb = document.querySelector(".joystick-thumb");
+const statusEffectIconEl = document.getElementById("status-effect-icon");
 const leaderboardEl = document.getElementById("leaderboard");
 const submitScoreForm = document.getElementById("submit-score");
 const playerNameInput = document.getElementById("player-name");
@@ -85,6 +121,8 @@ const scoreboardState = {
   hasSavedCurrentScore: false,
   isSaving: false
 };
+
+updateStatusEffectIndicator();
 
 function safeGetStoredName() {
   try {
@@ -152,6 +190,99 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function updateStatusEffectIndicator() {
+  if (!statusEffectIconEl) {
+    return;
+  }
+  if (!activeStatusEffect) {
+    statusEffectIconEl.textContent = "—";
+    statusEffectIconEl.setAttribute("aria-label", "Нет эффектов");
+    return;
+  }
+
+  const effect = STATUS_EFFECTS[activeStatusEffect.type];
+  if (effect) {
+    statusEffectIconEl.textContent = effect.icon;
+    statusEffectIconEl.setAttribute("aria-label", effect.label);
+  }
+}
+
+function clearStatusEffect() {
+  activeStatusEffect = null;
+  updateStatusEffectIndicator();
+}
+
+function setStatusEffect(effectType) {
+  if (!STATUS_EFFECTS[effectType]) {
+    clearStatusEffect();
+    return;
+  }
+  activeStatusEffect = {
+    type: effectType,
+    remaining: POWER_UP_DURATION
+  };
+  updateStatusEffectIndicator();
+
+  if (!fish.alive) {
+    return;
+  }
+
+  const newLimit = getFishTimeLimitForFish(fish.type);
+  if (effectType === "timeIncrease") {
+    remaining = Math.max(remaining, newLimit);
+  } else if (effectType === "timeDecrease") {
+    remaining = Math.min(remaining, newLimit);
+  }
+}
+
+function applyRandomStatusEffect() {
+  if (STATUS_EFFECT_TYPES.length === 0) {
+    return;
+  }
+  const randomIndex = Math.floor(Math.random() * STATUS_EFFECT_TYPES.length);
+  setStatusEffect(STATUS_EFFECT_TYPES[randomIndex]);
+}
+
+function getCatSpeedMultiplier() {
+  if (!activeStatusEffect) {
+    return 1;
+  }
+  if (activeStatusEffect.type === "speedUp") {
+    return 2;
+  }
+  if (activeStatusEffect.type === "speedDown") {
+    return 1 / 1.5;
+  }
+  return 1;
+}
+
+function getFishTimeLimitForFish(fishType) {
+  if (activeStatusEffect?.type === "timeIncrease") {
+    return 15;
+  }
+  if (activeStatusEffect?.type === "timeDecrease") {
+    return 5;
+  }
+  return fishType === "golden" ? GOLDEN_FISH_TIME_LIMIT : NORMAL_FISH_TIME_LIMIT;
+}
+
+function spawnPowerUp() {
+  const margin = 36;
+  powerUp.x = margin + Math.random() * (WORLD_SIZE - margin * 2);
+  powerUp.y = margin + Math.random() * (WORLD_SIZE - margin * 2);
+  powerUp.active = true;
+  powerUp.remaining = POWER_UP_LIFETIME;
+}
+
+function maybeSpawnPowerUp() {
+  if (Math.random() < POWER_UP_CHANCE) {
+    spawnPowerUp();
+  } else if (powerUp.active) {
+    // Allow existing power-up to continue ticking down.
+    powerUp.remaining = Math.min(powerUp.remaining, POWER_UP_LIFETIME);
+  }
 }
 
 async function fetchLeaderboard() {
@@ -760,8 +891,8 @@ function spawnFish() {
   fish.x = margin + Math.random() * (WORLD_SIZE - margin * 2);
   fish.y = margin + Math.random() * (WORLD_SIZE - margin * 2);
   fish.alive = true;
-  remaining =
-    fish.type === "golden" ? GOLDEN_FISH_TIME_LIMIT : NORMAL_FISH_TIME_LIMIT;
+  remaining = getFishTimeLimitForFish(fish.type);
+  maybeSpawnPowerUp();
 }
 
 function resetGame() {
@@ -780,6 +911,9 @@ function resetGame() {
   cat.stepAccumulator = 0;
   cat.facing = 1;
   goldenChainActive = false;
+  powerUp.active = false;
+  powerUp.remaining = 0;
+  clearStatusEffect();
   spawnFish();
   if (soundManager.enabled) {
     soundManager.startMusic();
@@ -797,6 +931,8 @@ function endGame(reason) {
   fish.alive = false;
   restartBtn.disabled = false;
   messageEl.textContent = reason + ` Результат: ${score}.`;
+  powerUp.active = false;
+  clearStatusEffect();
   updateBoardSize();
   soundManager.stopMusic(0.8);
   updateScoreFormControls();
@@ -818,18 +954,20 @@ function update(delta) {
 
   const length = Math.hypot(horizontalInput, verticalInput);
   const hasInput = length > 0.001;
+  const speedMultiplier = getCatSpeedMultiplier();
   if (hasInput) {
     const cappedMagnitude = Math.min(length, 1);
     const normalizedX = horizontalInput / (length || 1);
     const normalizedY = verticalInput / (length || 1);
-    const distance = cat.speed * delta * cappedMagnitude;
+    const distance = cat.speed * speedMultiplier * delta * cappedMagnitude;
     cat.x += normalizedX * distance;
     cat.y += normalizedY * distance;
     cat.moving = true;
     if (Math.abs(normalizedX) > 0.1) {
       cat.facing = normalizedX >= 0 ? 1 : -1;
     }
-    const walkIncrement = delta * WALK_FREQUENCY * cappedMagnitude;
+    const walkIncrement =
+      delta * WALK_FREQUENCY * cappedMagnitude * speedMultiplier;
     cat.walkCycle = (cat.walkCycle + walkIncrement) % 1;
     cat.stepAccumulator += walkIncrement;
     while (cat.stepAccumulator >= 0.5) {
@@ -845,6 +983,24 @@ function update(delta) {
   cat.x = clamp(cat.x, cat.size / 2, WORLD_SIZE - cat.size / 2);
   cat.y = clamp(cat.y, cat.size / 2, WORLD_SIZE - cat.size / 2);
 
+  if (powerUp.active) {
+    powerUp.remaining -= delta;
+    if (powerUp.remaining <= 0) {
+      powerUp.active = false;
+      powerUp.remaining = 0;
+    } else {
+      const dxPower = cat.x - powerUp.x;
+      const dyPower = cat.y - powerUp.y;
+      const distanceToPower = Math.hypot(dxPower, dyPower);
+      if (distanceToPower < (cat.size + powerUp.size) / 2) {
+        powerUp.active = false;
+        powerUp.remaining = 0;
+        applyRandomStatusEffect();
+        soundManager.playCatch();
+      }
+    }
+  }
+
   if (fish.alive) {
     const dx = cat.x - fish.x;
     const dy = cat.y - fish.y;
@@ -856,6 +1012,22 @@ function update(delta) {
       goldenChainActive = isGoldenFish;
       spawnFish();
       soundManager.playCatch();
+    }
+  }
+
+  if (activeStatusEffect) {
+    activeStatusEffect.remaining -= delta;
+    if (activeStatusEffect.remaining <= 0) {
+      const endedEffect = activeStatusEffect.type;
+      clearStatusEffect();
+      if (fish.alive && (endedEffect === "timeIncrease" || endedEffect === "timeDecrease")) {
+        const baseLimit = getFishTimeLimitForFish(fish.type);
+        if (endedEffect === "timeIncrease") {
+          remaining = Math.min(remaining, baseLimit);
+        } else {
+          remaining = Math.max(remaining, baseLimit);
+        }
+      }
     }
   }
 
@@ -1039,6 +1211,35 @@ function prepareCanvasForFrame() {
   ctx.clearRect(0, 0, WORLD_SIZE, WORLD_SIZE);
 }
 
+function drawPowerUp() {
+  if (!powerUp.active) return;
+  ctx.save();
+  ctx.translate(powerUp.x, powerUp.y);
+  const size = powerUp.size;
+  const half = size / 2;
+  ctx.fillStyle = "#dba15d";
+  ctx.strokeStyle = "#8b5a2b";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.rect(-half, -half, size, size);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.strokeStyle = "rgba(99, 55, 15, 0.6)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-half, -half);
+  ctx.lineTo(half, half);
+  ctx.moveTo(-half, half);
+  ctx.lineTo(half, -half);
+  ctx.moveTo(-half, 0);
+  ctx.lineTo(half, 0);
+  ctx.moveTo(0, -half);
+  ctx.lineTo(0, half);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function loop(timestamp) {
   if (gameOver) return;
 
@@ -1046,6 +1247,7 @@ function loop(timestamp) {
   lastTimestamp = timestamp;
   prepareCanvasForFrame();
   update(delta);
+  drawPowerUp();
   drawFish();
   drawCat();
   requestAnimationFrame(loop);

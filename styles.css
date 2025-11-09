@@ -41,6 +41,26 @@ h1 {
   font-size: 1.1rem;
 }
 
+.status-effect {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1rem;
+}
+
+.status-effect-label {
+  font-size: 0.95rem;
+  color: rgba(20, 54, 93, 0.8);
+}
+
+.status-effect-icon {
+  font-size: 1.4rem;
+  min-width: 1.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .playfield {
   display: grid;
   justify-items: center;
