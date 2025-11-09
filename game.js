@@ -1,3 +1,6 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./supabase-config.js";
+
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
@@ -37,6 +40,11 @@ const timerEl = document.getElementById("timer");
 const controlsContainer = document.querySelector(".controls");
 const joystickBase = document.querySelector(".joystick-base");
 const joystickThumb = document.querySelector(".joystick-thumb");
+const leaderboardEl = document.getElementById("leaderboard");
+const submitScoreForm = document.getElementById("submit-score");
+const playerNameInput = document.getElementById("player-name");
+const saveScoreButton = document.getElementById("save-score");
+const scoreStatusEl = document.getElementById("score-status");
 
 const directionKeys = new Set([
   "ArrowUp",
@@ -47,6 +55,159 @@ const directionKeys = new Set([
 const JOYSTICK_DEADZONE = 0.22;
 let joystickPointerId = null;
 const joystickVector = { x: 0, y: 0 };
+
+const sanitizedSupabaseUrl =
+  typeof SUPABASE_URL === "string" ? SUPABASE_URL.trim() : "";
+const sanitizedSupabaseKey =
+  typeof SUPABASE_ANON_KEY === "string" ? SUPABASE_ANON_KEY.trim() : "";
+const supabaseConfigured =
+  sanitizedSupabaseUrl &&
+  sanitizedSupabaseKey &&
+  sanitizedSupabaseUrl !== "https://your-project-ref.supabase.co" &&
+  sanitizedSupabaseKey !== "public-anon-key";
+const supabaseClient = supabaseConfigured
+  ? createClient(sanitizedSupabaseUrl, sanitizedSupabaseKey)
+  : null;
+
+const PLAYER_NAME_STORAGE_KEY = "cat-game:player-name";
+const DEFAULT_SCORE_STATUS =
+  "Сыграйте раунд и сохраните результат в таблицу лидеров.";
+
+const scoreboardState = {
+  hasSavedCurrentScore: false,
+  isSaving: false
+};
+
+function safeGetStoredName() {
+  try {
+    return window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY) || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function safeStoreName(name) {
+  try {
+    window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, name);
+  } catch (error) {
+    // Storage access might be blocked; ignore errors silently.
+  }
+}
+
+function setScoreStatus(text = "") {
+  if (scoreStatusEl) {
+    scoreStatusEl.textContent = text;
+  }
+}
+
+function updateScoreFormControls() {
+  if (!submitScoreForm) {
+    return;
+  }
+  const supabaseReady = Boolean(supabaseClient);
+  if (playerNameInput) {
+    playerNameInput.disabled = !supabaseReady || scoreboardState.isSaving;
+  }
+  if (saveScoreButton) {
+    const shouldEnable =
+      supabaseReady &&
+      gameOver &&
+      !scoreboardState.hasSavedCurrentScore &&
+      !scoreboardState.isSaving;
+    saveScoreButton.disabled = !shouldEnable;
+  }
+}
+
+function renderLeaderboard(items) {
+  if (!leaderboardEl) {
+    return;
+  }
+  leaderboardEl.innerHTML = "";
+  if (!items || items.length === 0) {
+    const emptyItem = document.createElement("li");
+    emptyItem.textContent = "Пока нет результатов.";
+    leaderboardEl.appendChild(emptyItem);
+    return;
+  }
+
+  items.forEach(({ name, score: scoreValue }) => {
+    const item = document.createElement("li");
+    item.innerHTML = `<span>${escapeHtml(name)}</span><span>${scoreValue}</span>`;
+    leaderboardEl.appendChild(item);
+  });
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+async function fetchLeaderboard() {
+  if (!supabaseClient) {
+    if (leaderboardEl && leaderboardEl.childElementCount === 0) {
+      const item = document.createElement("li");
+      item.textContent = "Supabase не настроен.";
+      leaderboardEl.appendChild(item);
+    }
+    return;
+  }
+
+  if (leaderboardEl) {
+    leaderboardEl.innerHTML = "";
+    const loadingItem = document.createElement("li");
+    loadingItem.textContent = "Загрузка...";
+    leaderboardEl.appendChild(loadingItem);
+  }
+
+  try {
+    const { data, error } = await supabaseClient
+      .from("scores")
+      .select("name, score")
+      .order("score", { ascending: false })
+      .order("created_at", { ascending: true })
+      .limit(10);
+    if (error) {
+      throw error;
+    }
+    renderLeaderboard(data || []);
+  } catch (error) {
+    console.error("Не удалось получить таблицу лидеров", error);
+    if (leaderboardEl) {
+      leaderboardEl.innerHTML = "";
+      const item = document.createElement("li");
+      item.textContent = "Не удалось загрузить таблицу лидеров.";
+      leaderboardEl.appendChild(item);
+    }
+    const fallbackMessage = scoreboardState.hasSavedCurrentScore
+      ? "Результат сохранён, но не удалось обновить таблицу лидеров."
+      : "Не удалось загрузить таблицу лидеров.";
+    setScoreStatus(fallbackMessage);
+  }
+}
+
+const storedName = safeGetStoredName();
+if (playerNameInput && storedName) {
+  playerNameInput.value = storedName;
+}
+
+if (!supabaseClient) {
+  if (leaderboardEl) {
+    leaderboardEl.innerHTML = "";
+    const item = document.createElement("li");
+    item.textContent = "Supabase не настроен.";
+    leaderboardEl.appendChild(item);
+  }
+  setScoreStatus("Укажите Supabase URL и ключ в файле supabase-config.js.");
+} else {
+  setScoreStatus(DEFAULT_SCORE_STATUS);
+  fetchLeaderboard();
+}
+
+updateScoreFormControls();
 
 class SoundManager {
   constructor() {
@@ -596,6 +757,8 @@ function resetGame() {
   score = 0;
   scoreEl.textContent = score;
   gameOver = false;
+  scoreboardState.hasSavedCurrentScore = false;
+  scoreboardState.isSaving = false;
   messageEl.textContent = "";
   restartBtn.disabled = true;
   cat.x = WORLD_SIZE / 2;
@@ -609,6 +772,10 @@ function resetGame() {
     soundManager.startMusic();
   }
   lastTimestamp = performance.now();
+  if (supabaseClient) {
+    setScoreStatus(DEFAULT_SCORE_STATUS);
+  }
+  updateScoreFormControls();
   requestAnimationFrame(loop);
 }
 
@@ -619,6 +786,10 @@ function endGame(reason) {
   messageEl.textContent = reason + ` Результат: ${score}.`;
   updateBoardSize();
   soundManager.stopMusic(0.8);
+  updateScoreFormControls();
+  if (supabaseClient && !scoreboardState.hasSavedCurrentScore) {
+    setScoreStatus("Введите имя и сохраните результат.");
+  }
 }
 
 function update(delta) {
@@ -874,6 +1045,58 @@ restartBtn.addEventListener("click", () => {
   ensureAudioActive();
   resetGame();
 });
+
+if (submitScoreForm) {
+  submitScoreForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!supabaseClient) {
+      return;
+    }
+
+    if (!gameOver) {
+      setScoreStatus("Завершите игру, чтобы сохранить результат.");
+      return;
+    }
+
+    if (scoreboardState.hasSavedCurrentScore || scoreboardState.isSaving) {
+      return;
+    }
+
+    const rawName = playerNameInput ? playerNameInput.value.trim() : "";
+    if (!rawName) {
+      setScoreStatus("Введите имя перед сохранением.");
+      if (playerNameInput) {
+        playerNameInput.focus();
+      }
+      return;
+    }
+
+    const normalizedName = rawName.slice(0, 32);
+
+    scoreboardState.isSaving = true;
+    updateScoreFormControls();
+    setScoreStatus("Сохраняем результат...");
+
+    try {
+      const safeScore = Math.max(0, Math.floor(score));
+      const payload = { name: normalizedName, score: safeScore };
+      const { error } = await supabaseClient.from("scores").insert(payload);
+      if (error) {
+        throw error;
+      }
+      scoreboardState.hasSavedCurrentScore = true;
+      setScoreStatus("Результат сохранён!");
+      safeStoreName(normalizedName);
+      fetchLeaderboard();
+    } catch (error) {
+      console.error("Не удалось сохранить результат", error);
+      setScoreStatus("Не удалось сохранить результат. Попробуйте ещё раз.");
+    } finally {
+      scoreboardState.isSaving = false;
+      updateScoreFormControls();
+    }
+  });
+}
 
 if (joystickBase) {
   const handlePointerMove = (event) => {
