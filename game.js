@@ -9,7 +9,7 @@ const MIN_BOARD_SIZE = 260;
 const GRID_SIZE = 10;
 const GRID_CELL_SIZE = WORLD_SIZE / GRID_SIZE;
 const WALL_THICKNESS = GRID_CELL_SIZE * 0.6;
-const MAX_WALL_TOTAL_LENGTH = 5;
+const MAX_WALL_TOTAL_LENGTH = 10;
 const gameContainer = document.querySelector(".game-container");
 
 const cat = {
