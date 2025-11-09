@@ -26,7 +26,7 @@
 
       appendAsset('script', {
         src: `game.js?v=${cacheTag}`,
-        defer: 'defer',
+        type: 'module',
       });
     })();
   </script>
@@ -51,6 +51,26 @@
     </div>
     <div id="message" role="status"></div>
     <button id="restart" type="button">Играть снова</button>
+    <section class="scoreboard" aria-labelledby="scoreboard-title">
+      <h2 id="scoreboard-title">Таблица лидеров</h2>
+      <ol id="leaderboard" class="scoreboard-list"></ol>
+      <form id="submit-score" class="scoreboard-form">
+        <label class="scoreboard-label" for="player-name">Ваше имя</label>
+        <div class="scoreboard-controls">
+          <input
+            id="player-name"
+            name="player-name"
+            type="text"
+            maxlength="32"
+            autocomplete="name"
+            placeholder="Котолюбитель"
+            required
+          >
+          <button id="save-score" type="submit">Сохранить очки</button>
+        </div>
+      </form>
+      <p id="score-status" class="scoreboard-status" role="status" aria-live="polite"></p>
+    </section>
   </div>
 </body>
 </html>

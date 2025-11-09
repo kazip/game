@@ -26,7 +26,7 @@ body {
   padding: 24px;
   border-radius: 16px;
   box-shadow: 0 10px 30px rgba(20, 54, 93, 0.25);
-  max-width: 540px;
+  max-width: 640px;
   width: 100%;
 }
 
@@ -90,6 +90,101 @@ canvas {
   opacity: 0.5;
   cursor: default;
   box-shadow: none;
+}
+
+.scoreboard {
+  text-align: left;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: inset 0 0 0 1px rgba(20, 54, 93, 0.06);
+  display: grid;
+  gap: 12px;
+}
+
+.scoreboard h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  text-align: center;
+}
+
+.scoreboard-list {
+  list-style: decimal;
+  margin: 0;
+  padding-left: 1.4em;
+  display: grid;
+  gap: 6px;
+  min-height: 2em;
+}
+
+.scoreboard-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  background: rgba(20, 54, 93, 0.06);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 0.95rem;
+}
+
+.scoreboard-list li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scoreboard-form {
+  display: grid;
+  gap: 8px;
+}
+
+.scoreboard-label {
+  font-size: 0.9rem;
+}
+
+.scoreboard-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.scoreboard-controls input {
+  flex: 1 1 auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(20, 54, 93, 0.25);
+  font-size: 0.95rem;
+}
+
+.scoreboard-controls button {
+  flex: 0 0 auto;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  background: #3cb371;
+  color: #fff;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.scoreboard-controls button:hover,
+.scoreboard-controls button:focus {
+  outline: none;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(60, 179, 113, 0.35);
+}
+
+.scoreboard-controls button:disabled {
+  opacity: 0.6;
+  cursor: default;
+  box-shadow: none;
+}
+
+.scoreboard-status {
+  margin: 0;
+  min-height: 1.2em;
+  font-size: 0.9rem;
+  color: rgba(20, 54, 93, 0.8);
 }
 
 .controls {
@@ -180,6 +275,18 @@ canvas {
   }
 
   #restart {
+    width: 100%;
+  }
+
+  .scoreboard {
+    padding: 14px;
+  }
+
+  .scoreboard-controls {
+    flex-direction: column;
+  }
+
+  .scoreboard-controls button {
     width: 100%;
   }
 
