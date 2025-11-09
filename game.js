@@ -6,6 +6,10 @@ const ctx = canvas.getContext("2d");
 
 const WORLD_SIZE = 500;
 const MIN_BOARD_SIZE = 260;
+const GRID_SIZE = 10;
+const GRID_CELL_SIZE = WORLD_SIZE / GRID_SIZE;
+const WALL_THICKNESS = GRID_CELL_SIZE * 0.6;
+const MAX_WALL_TOTAL_LENGTH = 5;
 const gameContainer = document.querySelector(".game-container");
 
 const cat = {
@@ -36,6 +40,8 @@ const powerUp = {
   active: false,
   remaining: 0
 };
+
+let walls = [];
 
 const POWER_UP_CHANCE = 0.05;
 const POWER_UP_LIFETIME = 5;
@@ -270,10 +276,19 @@ function getFishTimeLimitForFish(fishType) {
 
 function spawnPowerUp() {
   const margin = 36;
-  powerUp.x = margin + Math.random() * (WORLD_SIZE - margin * 2);
-  powerUp.y = margin + Math.random() * (WORLD_SIZE - margin * 2);
-  powerUp.active = true;
-  powerUp.remaining = POWER_UP_LIFETIME;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const candidateX = margin + Math.random() * (WORLD_SIZE - margin * 2);
+    const candidateY = margin + Math.random() * (WORLD_SIZE - margin * 2);
+    if (!circleIntersectsAnyWall(candidateX, candidateY, powerUp.size / 2 + 2)) {
+      powerUp.x = candidateX;
+      powerUp.y = candidateY;
+      powerUp.active = true;
+      powerUp.remaining = POWER_UP_LIFETIME;
+      return;
+    }
+  }
+  powerUp.active = false;
+  powerUp.remaining = 0;
 }
 
 function maybeSpawnPowerUp() {
@@ -779,6 +794,256 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function clampGridIndex(value) {
+  return clamp(value, 0, GRID_SIZE - 1);
+}
+
+function positionToGridCell(x, y) {
+  const col = clampGridIndex(Math.floor(x / GRID_CELL_SIZE));
+  const row = clampGridIndex(Math.floor(y / GRID_CELL_SIZE));
+  return { row, col };
+}
+
+function getCellsForSegment(row, col, length, orientation) {
+  const cells = [];
+  for (let offset = 0; offset < length; offset++) {
+    const currentRow = orientation === "horizontal" ? row : row + offset;
+    const currentCol = orientation === "horizontal" ? col + offset : col;
+    cells.push({ row: currentRow, col: currentCol });
+  }
+  return cells;
+}
+
+function buildBlockedGridFromSegments(segments) {
+  const grid = Array.from({ length: GRID_SIZE }, () =>
+    Array(GRID_SIZE).fill(false)
+  );
+  segments.forEach(({ row, col, length, orientation }) => {
+    for (let offset = 0; offset < length; offset++) {
+      const currentRow = orientation === "horizontal" ? row : row + offset;
+      const currentCol = orientation === "horizontal" ? col + offset : col;
+      if (
+        currentRow >= 0 &&
+        currentRow < GRID_SIZE &&
+        currentCol >= 0 &&
+        currentCol < GRID_SIZE
+      ) {
+        grid[currentRow][currentCol] = true;
+      }
+    }
+  });
+  return grid;
+}
+
+function isPathAvailable(catCell, fishCell, blockedGrid) {
+  const startKey = `${catCell.row},${catCell.col}`;
+  const targetKey = `${fishCell.row},${fishCell.col}`;
+  const visited = new Set();
+  const queue = [{ row: catCell.row, col: catCell.col }];
+  const deltas = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1]
+  ];
+
+  visited.add(startKey);
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const key = `${current.row},${current.col}`;
+    if (key === targetKey) {
+      return true;
+    }
+
+    for (const [dRow, dCol] of deltas) {
+      const nextRow = current.row + dRow;
+      const nextCol = current.col + dCol;
+      if (
+        nextRow < 0 ||
+        nextRow >= GRID_SIZE ||
+        nextCol < 0 ||
+        nextCol >= GRID_SIZE
+      ) {
+        continue;
+      }
+      if (blockedGrid[nextRow][nextCol]) {
+        continue;
+      }
+      const nextKey = `${nextRow},${nextCol}`;
+      if (visited.has(nextKey)) {
+        continue;
+      }
+      visited.add(nextKey);
+      queue.push({ row: nextRow, col: nextCol });
+    }
+  }
+
+  return false;
+}
+
+function convertSegmentsToWalls(segments) {
+  return segments.map(({ row, col, length, orientation }) => {
+    if (orientation === "horizontal") {
+      return {
+        x: col * GRID_CELL_SIZE,
+        y: row * GRID_CELL_SIZE + (GRID_CELL_SIZE - WALL_THICKNESS) / 2,
+        width: length * GRID_CELL_SIZE,
+        height: WALL_THICKNESS
+      };
+    }
+    return {
+      x: col * GRID_CELL_SIZE + (GRID_CELL_SIZE - WALL_THICKNESS) / 2,
+      y: row * GRID_CELL_SIZE,
+      width: WALL_THICKNESS,
+      height: length * GRID_CELL_SIZE
+    };
+  });
+}
+
+function circleIntersectsRect(cx, cy, radius, rect) {
+  const closestX = clamp(cx, rect.x, rect.x + rect.width);
+  const closestY = clamp(cy, rect.y, rect.y + rect.height);
+  const dx = cx - closestX;
+  const dy = cy - closestY;
+  return dx * dx + dy * dy < radius * radius;
+}
+
+function circleIntersectsAnyWall(cx, cy, radius, candidateWalls = walls) {
+  return candidateWalls.some((wall) => circleIntersectsRect(cx, cy, radius, wall));
+}
+
+function buildRandomWallSegments(catCell, fishCell) {
+  const segments = [];
+  const occupied = new Set();
+  let totalLength = 0;
+  let attempts = 0;
+
+  while (totalLength < MAX_WALL_TOTAL_LENGTH && attempts < 80) {
+    attempts += 1;
+    if (segments.length >= 2 && Math.random() < 0.35) {
+      break;
+    }
+
+    const remaining = MAX_WALL_TOTAL_LENGTH - totalLength;
+    const maxSegmentLength = Math.min(remaining, 3);
+    if (maxSegmentLength <= 0) {
+      continue;
+    }
+    const length = Math.min(
+      remaining,
+      1 + Math.floor(Math.random() * maxSegmentLength)
+    );
+    const orientation = Math.random() < 0.5 ? "horizontal" : "vertical";
+    const maxRow =
+      orientation === "horizontal" ? GRID_SIZE - 1 : GRID_SIZE - length;
+    const maxCol =
+      orientation === "horizontal" ? GRID_SIZE - length : GRID_SIZE - 1;
+
+    if (maxRow < 0 || maxCol < 0) {
+      continue;
+    }
+
+    const row = randomInt(0, maxRow);
+    const col = randomInt(0, maxCol);
+    const cells = getCellsForSegment(row, col, length, orientation);
+
+    let invalid = false;
+    for (const cell of cells) {
+      const key = `${cell.row},${cell.col}`;
+      if (occupied.has(key)) {
+        invalid = true;
+        break;
+      }
+      if (
+        (cell.row === catCell.row && cell.col === catCell.col) ||
+        (cell.row === fishCell.row && cell.col === fishCell.col)
+      ) {
+        invalid = true;
+        break;
+      }
+    }
+
+    if (invalid) {
+      continue;
+    }
+
+    cells.forEach((cell) => occupied.add(`${cell.row},${cell.col}`));
+    segments.push({ row, col, length, orientation });
+    totalLength += length;
+  }
+
+  if (segments.length < 2) {
+    return null;
+  }
+
+  return segments;
+}
+
+function generateWallsLayout(catCell, fishCell) {
+  for (let attempt = 0; attempt < 160; attempt++) {
+    const segments = buildRandomWallSegments(catCell, fishCell);
+    if (!segments) {
+      continue;
+    }
+    const blockedGrid = buildBlockedGridFromSegments(segments);
+    if (!isPathAvailable(catCell, fishCell, blockedGrid)) {
+      continue;
+    }
+    const candidateWalls = convertSegmentsToWalls(segments);
+    if (circleIntersectsAnyWall(cat.x, cat.y, cat.size / 2 + 2, candidateWalls)) {
+      continue;
+    }
+    return candidateWalls;
+  }
+  return null;
+}
+
+function resolveCatWallCollisions() {
+  if (walls.length === 0) {
+    return;
+  }
+
+  const radius = cat.size / 2;
+  let iterations = 0;
+  let moved = true;
+
+  while (moved && iterations < 4) {
+    moved = false;
+    iterations += 1;
+    for (const wall of walls) {
+      const closestX = clamp(cat.x, wall.x, wall.x + wall.width);
+      const closestY = clamp(cat.y, wall.y, wall.y + wall.height);
+      let dx = cat.x - closestX;
+      let dy = cat.y - closestY;
+      let distanceSquared = dx * dx + dy * dy;
+      if (distanceSquared < radius * radius) {
+        if (distanceSquared === 0) {
+          if (wall.width < wall.height) {
+            dx = cat.x < wall.x + wall.width / 2 ? -1 : 1;
+            dy = 0;
+          } else {
+            dx = 0;
+            dy = cat.y < wall.y + wall.height / 2 ? -1 : 1;
+          }
+          distanceSquared = 1;
+        }
+        const distance = Math.sqrt(distanceSquared);
+        const overlap = radius - distance;
+        const nx = dx / distance;
+        const ny = dy / distance;
+        cat.x += nx * overlap;
+        cat.y += ny * overlap;
+        moved = true;
+      }
+    }
+  }
+}
+
 function updateJoystickThumbPosition() {
   if (!joystickBase || !joystickThumb) {
     return;
@@ -888,8 +1153,46 @@ function spawnFish() {
   const shouldSpawnGolden = goldenChainActive || Math.random() < GOLDEN_FISH_CHANCE;
   fish.type = shouldSpawnGolden ? "golden" : "normal";
   goldenChainActive = shouldSpawnGolden;
-  fish.x = margin + Math.random() * (WORLD_SIZE - margin * 2);
-  fish.y = margin + Math.random() * (WORLD_SIZE - margin * 2);
+  const catCell = positionToGridCell(cat.x, cat.y);
+  let placed = false;
+  let attempts = 0;
+  while (!placed && attempts < 180) {
+    attempts += 1;
+    const candidateX = margin + Math.random() * (WORLD_SIZE - margin * 2);
+    const candidateY = margin + Math.random() * (WORLD_SIZE - margin * 2);
+    const fishCell = positionToGridCell(candidateX, candidateY);
+    if (fishCell.row === catCell.row && fishCell.col === catCell.col) {
+      continue;
+    }
+    const candidateWalls = generateWallsLayout(catCell, fishCell);
+    if (!candidateWalls) {
+      continue;
+    }
+    if (circleIntersectsAnyWall(candidateX, candidateY, fish.size / 2 + 2, candidateWalls)) {
+      continue;
+    }
+    walls = candidateWalls;
+    if (
+      powerUp.active &&
+      circleIntersectsAnyWall(powerUp.x, powerUp.y, powerUp.size / 2 + 2)
+    ) {
+      powerUp.active = false;
+      powerUp.remaining = 0;
+    }
+    resolveCatWallCollisions();
+    cat.x = clamp(cat.x, cat.size / 2, WORLD_SIZE - cat.size / 2);
+    cat.y = clamp(cat.y, cat.size / 2, WORLD_SIZE - cat.size / 2);
+    fish.x = candidateX;
+    fish.y = candidateY;
+    placed = true;
+  }
+
+  if (!placed) {
+    walls = [];
+    fish.x = margin + Math.random() * (WORLD_SIZE - margin * 2);
+    fish.y = margin + Math.random() * (WORLD_SIZE - margin * 2);
+  }
+
   fish.alive = true;
   remaining = getFishTimeLimitForFish(fish.type);
   maybeSpawnPowerUp();
@@ -980,6 +1283,7 @@ function update(delta) {
     cat.stepAccumulator = 0;
   }
 
+  resolveCatWallCollisions();
   cat.x = clamp(cat.x, cat.size / 2, WORLD_SIZE - cat.size / 2);
   cat.y = clamp(cat.y, cat.size / 2, WORLD_SIZE - cat.size / 2);
 
@@ -1211,6 +1515,22 @@ function prepareCanvasForFrame() {
   ctx.clearRect(0, 0, WORLD_SIZE, WORLD_SIZE);
 }
 
+function drawWalls() {
+  if (walls.length === 0) {
+    return;
+  }
+
+  ctx.save();
+  ctx.fillStyle = "#4a5a6a";
+  ctx.strokeStyle = "#1f2a33";
+  ctx.lineWidth = 4;
+  walls.forEach((wall) => {
+    ctx.fillRect(wall.x, wall.y, wall.width, wall.height);
+    ctx.strokeRect(wall.x, wall.y, wall.width, wall.height);
+  });
+  ctx.restore();
+}
+
 function drawPowerUp() {
   if (!powerUp.active) return;
   ctx.save();
@@ -1247,6 +1567,7 @@ function loop(timestamp) {
   lastTimestamp = timestamp;
   prepareCanvasForFrame();
   update(delta);
+  drawWalls();
   drawPowerUp();
   drawFish();
   drawCat();
