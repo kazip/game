@@ -25,14 +25,22 @@ const fish = {
   x: 0,
   y: 0,
   size: 28,
-  alive: false
+  alive: false,
+  type: "normal"
 };
 
 const keys = new Set();
+const NORMAL_FISH_TIME_LIMIT = 10;
+const NORMAL_FISH_POINTS = 1;
+const GOLDEN_FISH_CHANCE = 0.05;
+const GOLDEN_FISH_TIME_LIMIT = 5;
+const GOLDEN_FISH_POINTS = 5;
+
 let score = 0;
-let remaining = 10;
+let remaining = NORMAL_FISH_TIME_LIMIT;
 let lastTimestamp = 0;
 let gameOver = false;
+let goldenChainActive = false;
 const messageEl = document.getElementById("message");
 const restartBtn = document.getElementById("restart");
 const scoreEl = document.getElementById("score");
@@ -746,10 +754,14 @@ function updateBoardSize() {
 
 function spawnFish() {
   const margin = 30;
+  const shouldSpawnGolden = goldenChainActive || Math.random() < GOLDEN_FISH_CHANCE;
+  fish.type = shouldSpawnGolden ? "golden" : "normal";
+  goldenChainActive = shouldSpawnGolden;
   fish.x = margin + Math.random() * (WORLD_SIZE - margin * 2);
   fish.y = margin + Math.random() * (WORLD_SIZE - margin * 2);
   fish.alive = true;
-  remaining = 10;
+  remaining =
+    fish.type === "golden" ? GOLDEN_FISH_TIME_LIMIT : NORMAL_FISH_TIME_LIMIT;
 }
 
 function resetGame() {
@@ -767,6 +779,7 @@ function resetGame() {
   cat.walkCycle = 0;
   cat.stepAccumulator = 0;
   cat.facing = 1;
+  goldenChainActive = false;
   spawnFish();
   if (soundManager.enabled) {
     soundManager.startMusic();
@@ -837,8 +850,10 @@ function update(delta) {
     const dy = cat.y - fish.y;
     const distanceToFish = Math.hypot(dx, dy);
     if (distanceToFish < (cat.size + fish.size) / 2) {
-      score += 1;
+      const isGoldenFish = fish.type === "golden";
+      score += isGoldenFish ? GOLDEN_FISH_POINTS : NORMAL_FISH_POINTS;
       scoreEl.textContent = score;
+      goldenChainActive = isGoldenFish;
       spawnFish();
       soundManager.playCatch();
     }
@@ -848,7 +863,14 @@ function update(delta) {
   const displayTime = Math.max(remaining, 0);
   timerEl.textContent = displayTime.toFixed(1);
   if (remaining <= 0) {
-    endGame("Котик не успел поймать рыбку!");
+    const missedFishType = fish.type;
+    if (missedFishType === "golden") {
+      fish.alive = false;
+      goldenChainActive = false;
+      spawnFish();
+    } else {
+      endGame("Котик не успел поймать рыбку!");
+    }
   }
 }
 
@@ -984,12 +1006,15 @@ function drawFish() {
   if (!fish.alive) return;
   ctx.save();
   ctx.translate(fish.x, fish.y);
-  ctx.fillStyle = "#5cc8ff";
+  const bodyColor = fish.type === "golden" ? "#ffd700" : "#5cc8ff";
+  const finColor = fish.type === "golden" ? "#ffae00" : "#5cc8ff";
+  ctx.fillStyle = bodyColor;
   ctx.beginPath();
   ctx.ellipse(0, 0, fish.size / 2, fish.size / 3, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.beginPath();
+  ctx.fillStyle = finColor;
   ctx.moveTo(-fish.size / 2, 0);
   ctx.lineTo(-fish.size / 2 - 10, -fish.size / 3);
   ctx.lineTo(-fish.size / 2 - 10, fish.size / 3);
