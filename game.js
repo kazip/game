@@ -1,5 +1,6 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./supabase-config.js";
+import {createClient} from "https://esm.sh/@supabase/supabase-js@2";
+import {SUPABASE_ANON_KEY, SUPABASE_URL} from "./supabase-config.js";
+import {MultiplayerServer} from "./multiplayer-server.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -23,6 +24,9 @@ const cat = {
   stepAccumulator: 0
 };
 
+const CAT_BASE_SIZE = cat.size;
+const CAT_BASE_SPEED = cat.speed;
+
 const WALK_FREQUENCY = 4; // steps per second while the cat is moving
 
 const fish = {
@@ -33,6 +37,8 @@ const fish = {
   type: "normal"
 };
 
+const FISH_BASE_SIZE = fish.size;
+
 const powerUp = {
   x: 0,
   y: 0,
@@ -40,6 +46,8 @@ const powerUp = {
   active: false,
   remaining: 0
 };
+
+const POWER_UP_BASE_SIZE = powerUp.size;
 
 let walls = [];
 
@@ -101,6 +109,31 @@ const submitScoreForm = document.getElementById("submit-score");
 const playerNameInput = document.getElementById("player-name");
 const saveScoreButton = document.getElementById("save-score");
 const scoreStatusEl = document.getElementById("score-status");
+const modeOverlay = document.getElementById("mode-overlay");
+const startSingleBtn = document.getElementById("start-single");
+const startMultiplayerBtn = document.getElementById("start-multiplayer");
+const multiplayerOverlay = document.getElementById("multiplayer-overlay");
+const multiplayerJoinForm = document.getElementById("multiplayer-join-form");
+const multiplayerNameInput = document.getElementById("multiplayer-name");
+const multiplayerRoomInput = document.getElementById("multiplayer-room");
+const multiplayerErrorEl = document.getElementById("multiplayer-error");
+const multiplayerCancelBtn = document.getElementById("multiplayer-cancel");
+const multiplayerLobbyCard = document.getElementById("multiplayer-lobby");
+const multiplayerPrejoinCard = document.getElementById("multiplayer-prejoin");
+const multiplayerRoomLabel = document.getElementById("multiplayer-room-label");
+const multiplayerStatusEl = document.getElementById("multiplayer-status");
+const multiplayerPlayerList = document.getElementById("multiplayer-player-list");
+const multiplayerReadyBtn = document.getElementById("multiplayer-ready");
+const multiplayerLeaveBtn = document.getElementById("multiplayer-leave");
+const multiplayerHud = document.getElementById("multiplayer-hud");
+const multiplayerHudRoom = document.getElementById("multiplayer-hud-room");
+const multiplayerCountdownEl = document.getElementById("multiplayer-countdown");
+const multiplayerHudPlayers = document.getElementById("multiplayer-hud-players");
+const multiplayerGameMessage = document.getElementById("multiplayer-game-message");
+
+let gameMode = "menu";
+let multiplayerManager = null;
+let multiplayerRenderHandle = null;
 
 const directionKeys = new Set([
   "ArrowUp",
@@ -156,6 +189,123 @@ function setScoreStatus(text = "") {
   if (scoreStatusEl) {
     scoreStatusEl.textContent = text;
   }
+}
+
+function showModeSelection() {
+  if (modeOverlay) {
+    modeOverlay.classList.remove("hidden");
+  }
+  if (multiplayerOverlay) {
+    multiplayerOverlay.classList.add("hidden");
+  }
+}
+
+function hideModeSelection() {
+  if (modeOverlay) {
+    modeOverlay.classList.add("hidden");
+  }
+}
+
+function showMultiplayerJoinForm() {
+  if (multiplayerOverlay) {
+    multiplayerOverlay.classList.remove("hidden");
+  }
+  if (multiplayerPrejoinCard) {
+    multiplayerPrejoinCard.classList.remove("hidden");
+  }
+  if (multiplayerLobbyCard) {
+    multiplayerLobbyCard.classList.add("hidden");
+  }
+  if (multiplayerErrorEl) {
+    multiplayerErrorEl.textContent = "";
+  }
+  if (multiplayerNameInput && !multiplayerNameInput.value && playerNameInput) {
+    multiplayerNameInput.value = playerNameInput.value;
+  }
+  if (multiplayerNameInput) {
+    multiplayerNameInput.focus();
+  }
+}
+
+function showMultiplayerLobby() {
+  if (multiplayerOverlay) {
+    multiplayerOverlay.classList.remove("hidden");
+  }
+  if (multiplayerPrejoinCard) {
+    multiplayerPrejoinCard.classList.add("hidden");
+  }
+  if (multiplayerLobbyCard) {
+    multiplayerLobbyCard.classList.remove("hidden");
+  }
+}
+
+function hideMultiplayerOverlay() {
+  if (multiplayerOverlay) {
+    multiplayerOverlay.classList.add("hidden");
+  }
+}
+
+function showRestartButton() {
+  if (restartBtn) {
+    restartBtn.classList.remove("hidden");
+  }
+}
+
+function hideRestartButton() {
+  if (restartBtn) {
+    restartBtn.classList.add("hidden");
+  }
+}
+
+async function leaveMultiplayerRoom({ backToMenu = false } = {}) {
+  if (multiplayerManager) {
+    try {
+      await multiplayerManager.leave();
+    } catch (error) {
+      console.warn("Не удалось корректно выйти из комнаты", error);
+    }
+    multiplayerManager = null;
+  }
+  multiplayerHud?.classList.add("hidden");
+  showRestartButton();
+  if (backToMenu) {
+    showModeSelection();
+  }
+  messageEl.textContent = "";
+  timerEl.textContent = NORMAL_FISH_TIME_LIMIT.toFixed(1);
+  scoreEl.textContent = "0";
+  gameMode = backToMenu ? "menu" : gameMode;
+}
+
+async function joinMultiplayerRoom(roomName, playerName) {
+  if (multiplayerManager) {
+    await leaveMultiplayerRoom();
+  }
+  multiplayerManager = new MultiplayerManager();
+  await multiplayerManager.join(roomName, playerName);
+  safeStoreName(playerName);
+  multiplayerManager.updateInputFromControls();
+  hideModeSelection();
+  showMultiplayerLobby();
+  hideRestartButton();
+  messageEl.textContent = "";
+  timerEl.textContent = "0.0";
+  scoreEl.textContent = "0";
+  gameMode = "multiplayer";
+  updateBoardSize();
+}
+
+function startSingleMode() {
+  leaveMultiplayerRoom().catch(() => {});
+  hideMultiplayerOverlay();
+  showRestartButton();
+  gameMode = "single";
+  gameOver = true;
+  hideModeSelection();
+  setTimeout(() => {
+    gameOver = false;
+    resetGame();
+  }, 0);
 }
 
 function updateScoreFormControls() {
@@ -871,6 +1021,17 @@ function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+function createSeededRng(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state += 0x6d2b79f5;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function clampGridIndex(value) {
   return clamp(value, 0, GRID_SIZE - 1);
 }
@@ -1076,32 +1237,32 @@ function generateWallsLayout(catCell, fishCell) {
   return null;
 }
 
-function resolveCatWallCollisions() {
-  if (walls.length === 0) {
+function resolveEntityWallCollisions(entity, candidateWalls) {
+  if (!entity || !candidateWalls || candidateWalls.length === 0) {
     return;
   }
 
-  const radius = cat.size / 2;
+  const radius = entity.size / 2;
   let iterations = 0;
   let moved = true;
 
   while (moved && iterations < 4) {
     moved = false;
     iterations += 1;
-    for (const wall of walls) {
-      const closestX = clamp(cat.x, wall.x, wall.x + wall.width);
-      const closestY = clamp(cat.y, wall.y, wall.y + wall.height);
-      let dx = cat.x - closestX;
-      let dy = cat.y - closestY;
+    for (const wall of candidateWalls) {
+      const closestX = clamp(entity.x, wall.x, wall.x + wall.width);
+      const closestY = clamp(entity.y, wall.y, wall.y + wall.height);
+      let dx = entity.x - closestX;
+      let dy = entity.y - closestY;
       let distanceSquared = dx * dx + dy * dy;
       if (distanceSquared < radius * radius) {
         if (distanceSquared === 0) {
           if (wall.width < wall.height) {
-            dx = cat.x < wall.x + wall.width / 2 ? -1 : 1;
+            dx = entity.x < wall.x + wall.width / 2 ? -1 : 1;
             dy = 0;
           } else {
             dx = 0;
-            dy = cat.y < wall.y + wall.height / 2 ? -1 : 1;
+            dy = entity.y < wall.y + wall.height / 2 ? -1 : 1;
           }
           distanceSquared = 1;
         }
@@ -1109,12 +1270,16 @@ function resolveCatWallCollisions() {
         const overlap = radius - distance;
         const nx = dx / distance;
         const ny = dy / distance;
-        cat.x += nx * overlap;
-        cat.y += ny * overlap;
+        entity.x += nx * overlap;
+        entity.y += ny * overlap;
         moved = true;
       }
     }
   }
+}
+
+function resolveCatWallCollisions() {
+  resolveEntityWallCollisions(cat, walls);
 }
 
 function updateJoystickThumbPosition() {
@@ -1160,6 +1325,9 @@ function setJoystickVector(rawX, rawY, { bypassDeadzone = false } = {}) {
   }
 
   updateJoystickThumbPosition();
+  if (gameMode === "multiplayer" && multiplayerManager) {
+    multiplayerManager.updateInputFromControls();
+  }
 }
 
 function updateJoystickFromEvent(event) {
@@ -1182,6 +1350,9 @@ function resetJoystick() {
     joystickBase.classList.remove("dragging");
   }
   setJoystickVector(0, 0, { bypassDeadzone: true });
+  if (gameMode === "multiplayer" && multiplayerManager) {
+    multiplayerManager.updateInputFromControls();
+  }
 }
 
 function updateBoardSize() {
@@ -1319,7 +1490,7 @@ function endGame(reason) {
   }
 }
 
-function update(delta) {
+function getRawInputVector() {
   let horizontalInput =
     (keys.has("ArrowRight") || keys.has("d") ? 1 : 0) -
     (keys.has("ArrowLeft") || keys.has("a") ? 1 : 0);
@@ -1329,6 +1500,14 @@ function update(delta) {
 
   horizontalInput += joystickVector.x;
   verticalInput += joystickVector.y;
+
+  return { x: horizontalInput, y: verticalInput };
+}
+
+function update(delta) {
+  const inputVector = getRawInputVector();
+  let horizontalInput = inputVector.x;
+  let verticalInput = inputVector.y;
 
   const length = Math.hypot(horizontalInput, verticalInput);
   const hasInput = length > 0.001;
@@ -1433,22 +1612,26 @@ function update(delta) {
   }
 }
 
-function drawCat() {
+function drawCatSprite(catState) {
+  if (!catState) {
+    return;
+  }
   ctx.save();
-  ctx.translate(cat.x, cat.y);
-  ctx.scale(cat.facing, 1);
+  ctx.translate(catState.x, catState.y);
+  ctx.scale(catState.facing ?? 1, 1);
 
-  const cycle = cat.walkCycle * Math.PI * 2;
-  const bobbing = cat.moving ? Math.cos(cycle) * 2 : 0;
+  const cycle = (catState.walkCycle || 0) * Math.PI * 2;
+  const isMoving = Boolean(catState.moving);
+  const bobbing = isMoving ? Math.cos(cycle) * 2 : 0;
 
   // Tail
   ctx.save();
-  ctx.translate(-cat.size * 0.45, -cat.size * 0.1 + bobbing * 0.2);
-  const tailSwing = cat.moving ? Math.sin(cycle + Math.PI / 2) * 8 : 0;
+  ctx.translate(-catState.size * 0.45, -catState.size * 0.1 + bobbing * 0.2);
+  const tailSwing = isMoving ? Math.sin(cycle + Math.PI / 2) * 8 : 0;
   ctx.rotate((tailSwing * Math.PI) / 180);
   ctx.fillStyle = "#ffb347";
   ctx.beginPath();
-  ctx.ellipse(0, 0, cat.size * 0.35, cat.size * 0.12, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, catState.size * 0.35, catState.size * 0.12, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
@@ -1457,103 +1640,149 @@ function drawCat() {
   // Back legs
   ctx.fillStyle = "#f2a73a";
   for (let i = -1; i <= 1; i += 2) {
-    const swing = cat.moving ? Math.sin(cycle + (i < 0 ? 0 : Math.PI)) * 4 : 0;
+    const swing = isMoving ? Math.sin(cycle + (i < 0 ? 0 : Math.PI)) * 4 : 0;
     ctx.beginPath();
-    ctx.ellipse(i * cat.size * 0.23 + swing * 0.2, cat.size * 0.42, cat.size * 0.18, cat.size * 0.14, 0, 0, Math.PI * 2);
+    ctx.ellipse(
+      i * catState.size * 0.23 + swing * 0.2,
+      catState.size * 0.42,
+      catState.size * 0.18,
+      catState.size * 0.14,
+      0,
+      0,
+      Math.PI * 2
+    );
     ctx.fill();
   }
 
   // Body
   ctx.fillStyle = "#ffb347";
   ctx.beginPath();
-  ctx.ellipse(0, 0, cat.size / 2, cat.size / 2.3, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, catState.size / 2, catState.size / 2.3, 0, 0, Math.PI * 2);
   ctx.fill();
 
   // Belly
   ctx.fillStyle = "#ffd59c";
   ctx.beginPath();
-  ctx.ellipse(0, cat.size * 0.1, cat.size * 0.32, cat.size * 0.28, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, catState.size * 0.1, catState.size * 0.32, catState.size * 0.28, 0, 0, Math.PI * 2);
   ctx.fill();
 
   // Front legs
   ctx.fillStyle = "#ffb347";
   for (let i = -1; i <= 1; i += 2) {
     const phase = i < 0 ? Math.PI : 0;
-    const swing = cat.moving ? Math.sin(cycle + phase) * 4 : 0;
+    const swing = isMoving ? Math.sin(cycle + phase) * 4 : 0;
     ctx.beginPath();
-    ctx.ellipse(i * cat.size * 0.25 - swing * 0.2, cat.size * 0.44, cat.size * 0.16, cat.size * 0.15, 0, 0, Math.PI * 2);
+    ctx.ellipse(
+      i * catState.size * 0.25 - swing * 0.2,
+      catState.size * 0.44,
+      catState.size * 0.16,
+      catState.size * 0.15,
+      0,
+      0,
+      Math.PI * 2
+    );
     ctx.fill();
   }
 
   // Head
   ctx.save();
-  ctx.translate(cat.size * 0.26, -cat.size * 0.1);
+  ctx.translate(catState.size * 0.26, -catState.size * 0.1);
   ctx.fillStyle = "#ffb347";
   ctx.beginPath();
-  ctx.ellipse(0, 0, cat.size * 0.34, cat.size * 0.3, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, catState.size * 0.34, catState.size * 0.3, 0, 0, Math.PI * 2);
   ctx.fill();
 
   // Ears
   ctx.fillStyle = "#ffb347";
   ctx.beginPath();
-  ctx.moveTo(-cat.size * 0.18, -cat.size * 0.22);
-  ctx.lineTo(-cat.size * 0.08, -cat.size * 0.42);
-  ctx.lineTo(0, -cat.size * 0.18);
+  ctx.moveTo(-catState.size * 0.18, -catState.size * 0.22);
+  ctx.lineTo(-catState.size * 0.08, -catState.size * 0.42);
+  ctx.lineTo(0, -catState.size * 0.18);
   ctx.closePath();
   ctx.fill();
 
   ctx.beginPath();
-  ctx.moveTo(cat.size * 0.05, -cat.size * 0.18);
-  ctx.lineTo(cat.size * 0.18, -cat.size * 0.4);
-  ctx.lineTo(cat.size * 0.2, -cat.size * 0.12);
+  ctx.moveTo(catState.size * 0.05, -catState.size * 0.18);
+  ctx.lineTo(catState.size * 0.18, -catState.size * 0.4);
+  ctx.lineTo(catState.size * 0.2, -catState.size * 0.12);
   ctx.closePath();
   ctx.fill();
 
   // Eyes
   ctx.fillStyle = "#14365d";
   ctx.beginPath();
-  ctx.ellipse(-cat.size * 0.04, -cat.size * 0.05, cat.size * 0.07, cat.size * 0.09, 0, 0, Math.PI * 2);
-  ctx.ellipse(cat.size * 0.14, -cat.size * 0.05, cat.size * 0.07, cat.size * 0.09, 0, 0, Math.PI * 2);
+  ctx.ellipse(
+    -catState.size * 0.04,
+    -catState.size * 0.05,
+    catState.size * 0.07,
+    catState.size * 0.09,
+    0,
+    0,
+    Math.PI * 2
+  );
+  ctx.ellipse(
+    catState.size * 0.14,
+    -catState.size * 0.05,
+    catState.size * 0.07,
+    catState.size * 0.09,
+    0,
+    0,
+    Math.PI * 2
+  );
   ctx.fill();
 
   // Muzzle
   ctx.fillStyle = "#ffe5b4";
   ctx.beginPath();
-  ctx.arc(cat.size * 0.05, cat.size * 0.05, cat.size * 0.14, 0, Math.PI * 2);
+  ctx.arc(catState.size * 0.05, catState.size * 0.05, catState.size * 0.14, 0, Math.PI * 2);
   ctx.fill();
 
   // Nose and mouth
   ctx.fillStyle = "#ff6f61";
   ctx.beginPath();
-  ctx.moveTo(cat.size * 0.05, cat.size * 0.0);
-  ctx.lineTo(cat.size * 0.02, cat.size * 0.05);
-  ctx.lineTo(cat.size * 0.08, cat.size * 0.05);
+  ctx.moveTo(catState.size * 0.05, catState.size * 0.0);
+  ctx.lineTo(catState.size * 0.02, catState.size * 0.05);
+  ctx.lineTo(catState.size * 0.08, catState.size * 0.05);
   ctx.closePath();
   ctx.fill();
 
   ctx.strokeStyle = "#ff6f61";
   ctx.lineWidth = 1.8;
   ctx.beginPath();
-  ctx.moveTo(cat.size * 0.05, cat.size * 0.05);
-  ctx.lineTo(cat.size * 0.05, cat.size * 0.09);
-  ctx.moveTo(cat.size * 0.05, cat.size * 0.09);
-  ctx.bezierCurveTo(cat.size * 0.0, cat.size * 0.12, -cat.size * 0.02, cat.size * 0.16, cat.size * 0.02, cat.size * 0.17);
-  ctx.moveTo(cat.size * 0.05, cat.size * 0.09);
-  ctx.bezierCurveTo(cat.size * 0.11, cat.size * 0.12, cat.size * 0.12, cat.size * 0.16, cat.size * 0.08, cat.size * 0.17);
+  ctx.moveTo(catState.size * 0.05, catState.size * 0.05);
+  ctx.lineTo(catState.size * 0.05, catState.size * 0.09);
+  ctx.moveTo(catState.size * 0.05, catState.size * 0.09);
+  ctx.bezierCurveTo(
+    catState.size * 0.0,
+    catState.size * 0.12,
+    -catState.size * 0.02,
+    catState.size * 0.16,
+    catState.size * 0.02,
+    catState.size * 0.17
+  );
+  ctx.moveTo(catState.size * 0.05, catState.size * 0.09);
+  ctx.bezierCurveTo(
+    catState.size * 0.11,
+    catState.size * 0.12,
+    catState.size * 0.12,
+    catState.size * 0.16,
+    catState.size * 0.08,
+    catState.size * 0.17
+  );
   ctx.stroke();
 
   // Whiskers
   ctx.strokeStyle = "rgba(20, 54, 93, 0.7)";
   ctx.lineWidth = 1.4;
   ctx.beginPath();
-  ctx.moveTo(-cat.size * 0.05, cat.size * 0.02);
-  ctx.lineTo(-cat.size * 0.26, -cat.size * 0.03);
-  ctx.moveTo(-cat.size * 0.04, cat.size * 0.07);
-  ctx.lineTo(-cat.size * 0.24, cat.size * 0.12);
-  ctx.moveTo(cat.size * 0.12, cat.size * 0.02);
-  ctx.lineTo(cat.size * 0.32, -cat.size * 0.03);
-  ctx.moveTo(cat.size * 0.13, cat.size * 0.07);
-  ctx.lineTo(cat.size * 0.3, cat.size * 0.12);
+  ctx.moveTo(-catState.size * 0.05, catState.size * 0.02);
+  ctx.lineTo(-catState.size * 0.26, -catState.size * 0.03);
+  ctx.moveTo(-catState.size * 0.04, catState.size * 0.07);
+  ctx.lineTo(-catState.size * 0.24, catState.size * 0.12);
+  ctx.moveTo(catState.size * 0.12, catState.size * 0.02);
+  ctx.lineTo(catState.size * 0.32, -catState.size * 0.03);
+  ctx.moveTo(catState.size * 0.13, catState.size * 0.07);
+  ctx.lineTo(catState.size * 0.3, catState.size * 0.12);
   ctx.stroke();
 
   ctx.restore();
@@ -1561,30 +1790,38 @@ function drawCat() {
   ctx.restore();
 }
 
-function drawFish() {
-  if (!fish.alive) return;
+function drawCat() {
+  drawCatSprite(cat);
+}
+
+function drawFishSprite(fishState) {
+  if (!fishState || !fishState.alive) return;
   ctx.save();
-  ctx.translate(fish.x, fish.y);
-  const bodyColor = fish.type === "golden" ? "#ffd700" : "#5cc8ff";
-  const finColor = fish.type === "golden" ? "#ffae00" : "#5cc8ff";
+  ctx.translate(fishState.x, fishState.y);
+  const bodyColor = fishState.type === "golden" ? "#ffd700" : "#5cc8ff";
+  const finColor = fishState.type === "golden" ? "#ffae00" : "#5cc8ff";
   ctx.fillStyle = bodyColor;
   ctx.beginPath();
-  ctx.ellipse(0, 0, fish.size / 2, fish.size / 3, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, fishState.size / 2, fishState.size / 3, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.beginPath();
   ctx.fillStyle = finColor;
-  ctx.moveTo(-fish.size / 2, 0);
-  ctx.lineTo(-fish.size / 2 - 10, -fish.size / 3);
-  ctx.lineTo(-fish.size / 2 - 10, fish.size / 3);
+  ctx.moveTo(-fishState.size / 2, 0);
+  ctx.lineTo(-fishState.size / 2 - 10, -fishState.size / 3);
+  ctx.lineTo(-fishState.size / 2 - 10, fishState.size / 3);
   ctx.closePath();
   ctx.fill();
 
   ctx.fillStyle = "#14365d";
   ctx.beginPath();
-  ctx.arc(fish.size / 4, -fish.size / 6, 3, 0, Math.PI * 2);
+  ctx.arc(fishState.size / 4, -fishState.size / 6, 3, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+}
+
+function drawFish() {
+  drawFishSprite(fish);
 }
 
 function prepareCanvasForFrame() {
@@ -1598,8 +1835,8 @@ function prepareCanvasForFrame() {
   ctx.clearRect(0, 0, WORLD_SIZE, WORLD_SIZE);
 }
 
-function drawWalls() {
-  if (walls.length === 0) {
+function drawWallsCollection(targetWalls) {
+  if (!targetWalls || targetWalls.length === 0) {
     return;
   }
 
@@ -1607,18 +1844,22 @@ function drawWalls() {
   ctx.fillStyle = "#4a5a6a";
   ctx.strokeStyle = "#1f2a33";
   ctx.lineWidth = 4;
-  walls.forEach((wall) => {
+  targetWalls.forEach((wall) => {
     ctx.fillRect(wall.x, wall.y, wall.width, wall.height);
     ctx.strokeRect(wall.x, wall.y, wall.width, wall.height);
   });
   ctx.restore();
 }
 
-function drawPowerUp() {
-  if (!powerUp.active) return;
+function drawWalls() {
+  drawWallsCollection(walls);
+}
+
+function drawPowerUpSprite(powerUpState) {
+  if (!powerUpState || !powerUpState.active) return;
   ctx.save();
-  ctx.translate(powerUp.x, powerUp.y);
-  const size = powerUp.size;
+  ctx.translate(powerUpState.x, powerUpState.y);
+  const size = powerUpState.size;
   const half = size / 2;
   ctx.fillStyle = "#dba15d";
   ctx.strokeStyle = "#8b5a2b";
@@ -1643,13 +1884,17 @@ function drawPowerUp() {
   ctx.restore();
 }
 
-function drawMines() {
-  if (mines.length === 0) {
+function drawPowerUp() {
+  drawPowerUpSprite(powerUp);
+}
+
+function drawMinesCollection(targetMines) {
+  if (!targetMines || targetMines.length === 0) {
     return;
   }
 
   ctx.save();
-  mines.forEach((mine) => {
+  targetMines.forEach((mine) => {
     ctx.save();
     ctx.translate(mine.x, mine.y);
     const radius = mine.size / 2;
@@ -1680,8 +1925,460 @@ function drawMines() {
   ctx.restore();
 }
 
+function drawMines() {
+  drawMinesCollection(mines);
+}
+
+function generateClientId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `player-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createMultiplayerServerDependencies() {
+  return {
+    WORLD_SIZE,
+    FISH_BASE_SIZE,
+    POWER_UP_BASE_SIZE,
+    NORMAL_FISH_TIME_LIMIT,
+    createSeededRng,
+    CAT_BASE_SIZE,
+    GRID_CELL_SIZE,
+    WALL_THICKNESS,
+    circleIntersectsRect,
+    circleIntersectsAnyWall,
+    MAX_MINES,
+    MINE_SIZE,
+    MINE_MIN_DISTANCE,
+    clamp,
+    CAT_BASE_SPEED,
+    WALK_FREQUENCY,
+    resolveEntityWallCollisions,
+    GOLDEN_FISH_POINTS,
+    NORMAL_FISH_POINTS,
+    GOLDEN_FISH_CHANCE,
+    getFishTimeLimitForFish
+  };
+}
+
+class MultiplayerManager {
+  constructor() {
+    this.playerId = generateClientId();
+    this.playerName = "";
+    this.roomName = "";
+    this.channel = null;
+    this.isHost = false;
+    this.server = null;
+    this.state = null;
+    this.ready = false;
+    this.inputVector = { x: 0, y: 0 };
+    this.lastInputSentAt = 0;
+    this.rendering = false;
+    this.presenceMeta = null;
+    this.cachedPresence = null;
+    this.renderFrameBound = (timestamp) => this.renderFrame(timestamp);
+  }
+
+  sendPresenceUpdate(meta) {
+    if (!this.channel || !meta) {
+      return Promise.resolve();
+    }
+    const updateFn =
+      typeof this.channel.updatePresence === "function"
+        ? this.channel.updatePresence.bind(this.channel)
+        : typeof this.channel.update === "function"
+        ? this.channel.update.bind(this.channel)
+        : typeof this.channel.track === "function"
+        ? this.channel.track.bind(this.channel)
+        : null;
+    if (!updateFn) {
+      return Promise.resolve();
+    }
+    try {
+      const result = updateFn(meta);
+      return result && typeof result.then === "function"
+        ? result
+        : Promise.resolve(result);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  async join(roomName, playerName) {
+    if (!supabaseClient) {
+      throw new Error("Supabase не настроен");
+    }
+    this.roomName = roomName;
+    this.playerName = playerName;
+    this.presenceMeta = {
+      playerId: this.playerId,
+      name: this.playerName,
+      joinedAt: Date.now(),
+      isHost: false,
+      ready: false
+    };
+    this.channel = supabaseClient.channel(`cat-mp:${roomName}`, {
+      config: { presence: { key: this.playerId } }
+    });
+    this.setupChannelHandlers();
+    const { error: subscribeError } = await this.channel.subscribe();
+    if (subscribeError) {
+      throw subscribeError;
+    }
+    await this.channel.track(this.presenceMeta);
+    this.updateReadyButton();
+    this.updateLobbyUI();
+  }
+
+  async leave() {
+    this.stopRenderLoop();
+    if (this.server) {
+      this.server.destroy();
+      this.server = null;
+    }
+    if (this.channel) {
+      try {
+        await this.channel.untrack();
+      } catch (error) {
+        // ignore
+      }
+      try {
+        await this.channel.unsubscribe();
+      } catch (error) {
+        // ignore
+      }
+    }
+    this.channel = null;
+    this.state = null;
+    this.isHost = false;
+    this.ready = false;
+    this.cachedPresence = null;
+    this.updateReadyButton();
+    this.updateHud();
+  }
+
+  setupChannelHandlers() {
+    if (!this.channel) {
+      return;
+    }
+    this.channel.on("broadcast", { event: "server-state" }, ({ payload }) => {
+      this.handleServerState(payload);
+    });
+    this.channel.on("broadcast", { event: "player-ready" }, ({ payload }) => {
+      if (this.isHost && this.server) {
+        this.server.handlePlayerReady(payload.playerId, payload.ready);
+      }
+    });
+    this.channel.on("broadcast", { event: "player-input" }, ({ payload }) => {
+      if (this.isHost && this.server) {
+        this.server.handlePlayerInput(payload.playerId, payload.vector);
+      }
+    });
+    this.channel.on("presence", { event: "sync" }, () => {
+      this.handlePresenceSync();
+    });
+  }
+
+  handlePresenceSync() {
+    if (!this.channel) {
+      return;
+    }
+    const presence = this.channel.presenceState();
+    this.cachedPresence = presence;
+    const entries = [];
+    Object.values(presence || {}).forEach((states) => {
+      states.forEach((meta) => {
+        if (meta && meta.playerId) {
+          entries.push(meta);
+        }
+      });
+    });
+    entries.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+    const currentHost = entries.find((entry) => entry.isHost);
+    if (!currentHost && entries.length > 0) {
+      const first = entries[0];
+      if (first && first.playerId === this.playerId) {
+        this.becomeHost();
+      }
+    } else if (currentHost && currentHost.playerId === this.playerId) {
+      this.startHosting();
+    } else if (this.isHost && currentHost && currentHost.playerId !== this.playerId) {
+      this.stopHosting();
+    }
+
+    if (this.isHost && this.server) {
+      this.server.syncPresence(presence);
+      this.server.startTicking();
+    }
+
+    this.updateLobbyUI();
+  }
+
+  async becomeHost() {
+    if (this.isHost || !this.channel) {
+      return;
+    }
+    this.isHost = true;
+    this.presenceMeta = { ...this.presenceMeta, isHost: true };
+    try {
+      await this.sendPresenceUpdate(this.presenceMeta);
+    } catch (error) {
+      // ignore
+    }
+    this.startHosting();
+  }
+
+  startHosting() {
+    if (this.server || !this.channel) {
+      return;
+    }
+    this.server = new MultiplayerServer(this, createMultiplayerServerDependencies());
+    this.server.syncPresence(this.channel.presenceState());
+    this.server.startTicking();
+  }
+
+  stopHosting() {
+    if (!this.isHost) {
+      return;
+    }
+    this.isHost = false;
+    if (this.server) {
+      this.server.destroy();
+      this.server = null;
+    }
+    if (this.channel && this.presenceMeta) {
+      this.presenceMeta = { ...this.presenceMeta, isHost: false };
+      this.sendPresenceUpdate(this.presenceMeta).catch(() => {});
+    }
+  }
+
+  broadcastState(state) {
+    if (!this.channel) {
+      return;
+    }
+    this.channel.send({
+      type: "broadcast",
+      event: "server-state",
+      payload: state
+    });
+    this.handleServerState(state);
+  }
+
+  handleServerState(state) {
+    if (!state) {
+      return;
+    }
+    this.state = state;
+    if (state.phase === "playing" || state.phase === "countdown" || state.phase === "ended") {
+      hideMultiplayerOverlay();
+    }
+    this.updateHud();
+    this.updateLobbyUI();
+    this.ensureRender();
+  }
+
+  ensureRender() {
+    if (this.rendering) {
+      return;
+    }
+    this.rendering = true;
+    multiplayerRenderHandle = requestAnimationFrame(this.renderFrameBound);
+  }
+
+  stopRenderLoop() {
+    this.rendering = false;
+    if (multiplayerRenderHandle) {
+      cancelAnimationFrame(multiplayerRenderHandle);
+      multiplayerRenderHandle = null;
+    }
+  }
+
+  renderFrame() {
+    if (!this.rendering) {
+      return;
+    }
+    if (gameMode !== "multiplayer") {
+      this.stopRenderLoop();
+      return;
+    }
+    prepareCanvasForFrame();
+    if (this.state) {
+      drawWallsCollection(this.state.walls || []);
+      drawMinesCollection(this.state.mines || []);
+      drawPowerUpSprite(this.state.powerUp);
+      drawFishSprite(this.state.fish);
+      (this.state.players || []).forEach((player) => {
+        drawCatSprite(player);
+      });
+    }
+    multiplayerRenderHandle = requestAnimationFrame(this.renderFrameBound);
+  }
+
+  toggleReady() {
+    this.ready = !this.ready;
+    this.updateReadyButton();
+    if (!this.channel) {
+      return;
+    }
+    if (this.presenceMeta) {
+      this.presenceMeta = { ...this.presenceMeta, ready: this.ready };
+      this.sendPresenceUpdate(this.presenceMeta).catch(() => {});
+    }
+    this.channel.send({
+      type: "broadcast",
+      event: "player-ready",
+      payload: { playerId: this.playerId, ready: this.ready }
+    });
+    if (this.isHost && this.server) {
+      this.server.handlePlayerReady(this.playerId, this.ready);
+    }
+  }
+
+  updateReadyButton() {
+    if (multiplayerReadyBtn) {
+      multiplayerReadyBtn.textContent = this.ready ? "Не готов" : "Готов";
+      multiplayerReadyBtn.disabled = !this.channel;
+    }
+  }
+
+  sendInput(vector) {
+    if (!this.channel) {
+      return;
+    }
+    this.channel.send({
+      type: "broadcast",
+      event: "player-input",
+      payload: { playerId: this.playerId, vector }
+    });
+    if (this.isHost && this.server) {
+      this.server.handlePlayerInput(this.playerId, vector);
+    }
+  }
+
+  updateInputFromControls() {
+    const raw = getRawInputVector();
+    const vector = { x: raw.x, y: raw.y };
+    const changed =
+      Math.abs(vector.x - this.inputVector.x) > 0.02 ||
+      Math.abs(vector.y - this.inputVector.y) > 0.02;
+    const now = performance.now();
+    if (changed || now - this.lastInputSentAt > 120) {
+      this.inputVector = vector;
+      this.lastInputSentAt = now;
+      this.sendInput(vector);
+    }
+  }
+
+  updateLobbyUI() {
+    if (!multiplayerLobbyCard || multiplayerLobbyCard.classList.contains("hidden")) {
+      return;
+    }
+    if (multiplayerRoomLabel) {
+      multiplayerRoomLabel.textContent = this.roomName;
+    }
+    const players = this.state?.players || this.collectPresencePlayers();
+    if (multiplayerPlayerList) {
+      multiplayerPlayerList.innerHTML = "";
+      players.forEach((player) => {
+        const item = document.createElement("li");
+        const statusText = this.state
+          ? player.ready
+            ? "Готов"
+            : "Не готов"
+          : player.ready
+          ? "Готов"
+          : "Не готов";
+        item.innerHTML = `<span>${escapeHtml(player.name)}</span><span>${statusText}</span>`;
+        multiplayerPlayerList.appendChild(item);
+      });
+    }
+    if (multiplayerStatusEl) {
+        multiplayerStatusEl.textContent = this.state?.message || "Подождите немного, идёт подключение";
+    }
+  }
+
+  collectPresencePlayers() {
+    const players = [];
+    if (!this.cachedPresence) {
+      return players;
+    }
+    Object.values(this.cachedPresence).forEach((states) => {
+      states.forEach((meta) => {
+        if (meta && meta.playerId) {
+          players.push({
+            id: meta.playerId,
+            name: meta.name || "Игрок",
+            ready: Boolean(meta.ready)
+          });
+        }
+      });
+    });
+    return players;
+  }
+
+  updateHud() {
+    if (!multiplayerHud) {
+      return;
+    }
+    if (!this.state) {
+      multiplayerHud.classList.add("hidden");
+      return;
+    }
+    if (multiplayerHudRoom) {
+      multiplayerHudRoom.textContent = this.roomName;
+    }
+    const phase = this.state.phase;
+    const shouldShowHud = phase === "countdown" || phase === "playing" || phase === "ended";
+    multiplayerHud.classList.toggle("hidden", !shouldShowHud);
+    if (shouldShowHud && multiplayerHudPlayers) {
+      multiplayerHudPlayers.innerHTML = "";
+      const sorted = [...(this.state.players || [])].sort((a, b) => b.score - a.score);
+      sorted.forEach((player) => {
+        const item = document.createElement("li");
+        let status = "Ждёт";
+        if (phase === "playing") {
+          status = player.alive ? "В игре" : "Выбыл";
+        } else if (phase === "countdown") {
+          status = "Готовится";
+        } else if (phase === "ended") {
+          status = this.state.winnerId === player.id ? "Победитель" : "Итог";
+        }
+        item.innerHTML = `<span>${escapeHtml(player.name)}</span><span>${player.score} · ${status}</span>`;
+        multiplayerHudPlayers.appendChild(item);
+      });
+    }
+    if (multiplayerCountdownEl) {
+      if (phase === "countdown") {
+        multiplayerCountdownEl.textContent = `Старт через ${Math.ceil(this.state.countdown || 0)} с`;
+      } else if (phase === "playing") {
+        multiplayerCountdownEl.textContent = `Время: ${(this.state.remaining || 0).toFixed(1)} c`;
+      } else if (phase === "ended") {
+        multiplayerCountdownEl.textContent = "Раунд завершён";
+      } else {
+        multiplayerCountdownEl.textContent = "";
+      }
+    }
+    if (multiplayerGameMessage) {
+      multiplayerGameMessage.textContent = this.state.message || "";
+    }
+
+    const localPlayer = (this.state.players || []).find((player) => player.id === this.playerId);
+    if (scoreEl && localPlayer) {
+      scoreEl.textContent = localPlayer.score;
+    } else if (scoreEl && !localPlayer) {
+      scoreEl.textContent = "0";
+    }
+    if (timerEl) {
+      const timerValue = phase === "countdown" ? this.state.countdown : this.state.remaining;
+      timerEl.textContent = timerValue != null ? Math.max(timerValue, 0).toFixed(1) : "0.0";
+    }
+  }
+}
+
+
 function loop(timestamp) {
-  if (gameOver) return;
+  if (gameMode !== "single" || gameOver) return;
 
   const delta = (timestamp - lastTimestamp) / 1000;
   lastTimestamp = timestamp;
@@ -1696,24 +2393,123 @@ function loop(timestamp) {
 }
 
 window.addEventListener("keydown", (event) => {
+  if (!event || event.key === undefined) {
+     return;
+  }
+
   const key = normalizeKey(event.key);
   if (directionKeys.has(key)) {
     event.preventDefault();
   }
   ensureAudioActive();
   keys.add(key);
+  if (gameMode === "multiplayer" && multiplayerManager) {
+    multiplayerManager.updateInputFromControls();
+  }
 });
 
 window.addEventListener("keyup", (event) => {
-  const key = normalizeKey(event.key);
+    if (!event || event.key === undefined) {
+        return;
+    }
+
+    const key = normalizeKey(event.key);
   keys.delete(key);
+  if (gameMode === "multiplayer" && multiplayerManager) {
+    multiplayerManager.updateInputFromControls();
+  }
 });
 
 restartBtn.addEventListener("click", () => {
-  if (!gameOver) return;
+  if (gameMode !== "single" || !gameOver) return;
   ensureAudioActive();
   resetGame();
 });
+
+if (startSingleBtn) {
+  startSingleBtn.addEventListener("click", () => {
+    startSingleMode();
+  });
+}
+
+if (startMultiplayerBtn) {
+  startMultiplayerBtn.addEventListener("click", () => {
+    hideModeSelection();
+    showMultiplayerJoinForm();
+  });
+}
+
+if (multiplayerCancelBtn) {
+  multiplayerCancelBtn.addEventListener("click", async () => {
+    await leaveMultiplayerRoom({ backToMenu: true });
+    hideMultiplayerOverlay();
+    showModeSelection();
+  });
+}
+
+let multiplayerJoinInProgress = false;
+if (multiplayerJoinForm) {
+  multiplayerJoinForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (multiplayerJoinInProgress) {
+      return;
+    }
+    if (!supabaseClient) {
+      multiplayerErrorEl.textContent = "Supabase не настроен.";
+      return;
+    }
+    const rawName = multiplayerNameInput ? multiplayerNameInput.value.trim() : "";
+    const rawRoom = multiplayerRoomInput ? multiplayerRoomInput.value.trim() : "";
+    if (!rawName) {
+      multiplayerErrorEl.textContent = "Введите имя игрока.";
+      if (multiplayerNameInput) {
+        multiplayerNameInput.focus();
+      }
+      return;
+    }
+    if (!rawRoom) {
+      multiplayerErrorEl.textContent = "Введите название комнаты.";
+      if (multiplayerRoomInput) {
+        multiplayerRoomInput.focus();
+      }
+      return;
+    }
+
+    const normalizedName = rawName.slice(0, 32);
+    const normalizedRoom = rawRoom.slice(0, 32);
+
+    multiplayerJoinInProgress = true;
+    multiplayerErrorEl.textContent = "";
+    try {
+      await joinMultiplayerRoom(normalizedRoom, normalizedName);
+      if (playerNameInput) {
+        playerNameInput.value = normalizedName;
+      }
+    } catch (error) {
+      console.error("Не удалось подключиться к комнате", error);
+      multiplayerErrorEl.textContent = "Не удалось подключиться. Попробуйте ещё раз.";
+    } finally {
+      multiplayerJoinInProgress = false;
+    }
+  });
+}
+
+if (multiplayerReadyBtn) {
+  multiplayerReadyBtn.addEventListener("click", () => {
+    if (gameMode !== "multiplayer" || !multiplayerManager) {
+      return;
+    }
+    multiplayerManager.toggleReady();
+  });
+}
+
+if (multiplayerLeaveBtn) {
+  multiplayerLeaveBtn.addEventListener("click", async () => {
+    await leaveMultiplayerRoom({ backToMenu: true });
+    hideMultiplayerOverlay();
+    showModeSelection();
+  });
+}
 
 if (submitScoreForm) {
   submitScoreForm.addEventListener("submit", async (event) => {
@@ -1824,6 +2620,9 @@ if (joystickBase) {
 window.addEventListener("blur", () => {
   keys.clear();
   resetJoystick();
+  if (gameMode === "multiplayer" && multiplayerManager) {
+    multiplayerManager.updateInputFromControls();
+  }
 });
 
 window.addEventListener("resize", () => {
@@ -1836,7 +2635,10 @@ document.addEventListener("visibilitychange", () => {
     keys.clear();
     resetJoystick();
     soundManager.stopMusic(0.4);
-  } else if (!gameOver && soundManager.enabled) {
+    if (gameMode === "multiplayer" && multiplayerManager) {
+      multiplayerManager.updateInputFromControls();
+    }
+  } else if (gameMode === "single" && !gameOver && soundManager.enabled) {
     soundManager.startMusic();
   }
 });
@@ -1862,4 +2664,8 @@ if (coarsePointerQuery) {
 
 // Запуск игры при загрузке страницы
 resetJoystick();
-resetGame();
+hideRestartButton();
+showModeSelection();
+updateBoardSize();
+scoreEl.textContent = "0";
+timerEl.textContent = NORMAL_FISH_TIME_LIMIT.toFixed(1);
