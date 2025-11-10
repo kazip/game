@@ -1,6 +1,6 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./supabase-config.js";
-import { MultiplayerServer } from "./multiplayer-server.js";
+import {createClient} from "https://esm.sh/@supabase/supabase-js@2";
+import {SUPABASE_ANON_KEY, SUPABASE_URL} from "./supabase-config.js";
+import {MultiplayerServer} from "./multiplayer-server.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -2294,8 +2294,7 @@ class MultiplayerManager {
       });
     }
     if (multiplayerStatusEl) {
-      const message = this.state?.message || "Подождите немного, идёт подключение";
-      multiplayerStatusEl.textContent = message;
+        multiplayerStatusEl.textContent = this.state?.message || "Подождите немного, идёт подключение";
     }
   }
 
@@ -2394,6 +2393,10 @@ function loop(timestamp) {
 }
 
 window.addEventListener("keydown", (event) => {
+  if (!event || event.key === undefined) {
+     return;
+  }
+
   const key = normalizeKey(event.key);
   if (directionKeys.has(key)) {
     event.preventDefault();
@@ -2406,7 +2409,11 @@ window.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("keyup", (event) => {
-  const key = normalizeKey(event.key);
+    if (!event || event.key === undefined) {
+        return;
+    }
+
+    const key = normalizeKey(event.key);
   keys.delete(key);
   if (gameMode === "multiplayer" && multiplayerManager) {
     multiplayerManager.updateInputFromControls();
