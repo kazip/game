@@ -1980,6 +1980,31 @@ class MultiplayerManager {
     this.renderFrameBound = (timestamp) => this.renderFrame(timestamp);
   }
 
+  sendPresenceUpdate(meta) {
+    if (!this.channel || !meta) {
+      return Promise.resolve();
+    }
+    const updateFn =
+      typeof this.channel.updatePresence === "function"
+        ? this.channel.updatePresence.bind(this.channel)
+        : typeof this.channel.update === "function"
+        ? this.channel.update.bind(this.channel)
+        : typeof this.channel.track === "function"
+        ? this.channel.track.bind(this.channel)
+        : null;
+    if (!updateFn) {
+      return Promise.resolve();
+    }
+    try {
+      const result = updateFn(meta);
+      return result && typeof result.then === "function"
+        ? result
+        : Promise.resolve(result);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
   async join(roomName, playerName) {
     if (!supabaseClient) {
       throw new Error("Supabase не настроен");
@@ -2097,7 +2122,7 @@ class MultiplayerManager {
     this.isHost = true;
     this.presenceMeta = { ...this.presenceMeta, isHost: true };
     try {
-      await this.channel.updatePresence(this.presenceMeta);
+      await this.sendPresenceUpdate(this.presenceMeta);
     } catch (error) {
       // ignore
     }
@@ -2124,7 +2149,7 @@ class MultiplayerManager {
     }
     if (this.channel && this.presenceMeta) {
       this.presenceMeta = { ...this.presenceMeta, isHost: false };
-      this.channel.updatePresence(this.presenceMeta).catch(() => {});
+      this.sendPresenceUpdate(this.presenceMeta).catch(() => {});
     }
   }
 
@@ -2198,7 +2223,7 @@ class MultiplayerManager {
     }
     if (this.presenceMeta) {
       this.presenceMeta = { ...this.presenceMeta, ready: this.ready };
-      this.channel.updatePresence(this.presenceMeta).catch(() => {});
+      this.sendPresenceUpdate(this.presenceMeta).catch(() => {});
     }
     this.channel.send({
       type: "broadcast",
