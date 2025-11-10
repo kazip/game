@@ -34,6 +34,48 @@
 <body>
   <div class="game-container">
     <h1>Котик ловит рыбку</h1>
+    <div id="mode-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="mode-title">
+      <div class="modal-card">
+        <h2 id="mode-title">Выберите режим игры</h2>
+        <div class="modal-actions">
+          <button id="start-single" type="button">Соло</button>
+          <button id="start-multiplayer" type="button">Мультиплеер</button>
+        </div>
+      </div>
+    </div>
+    <div id="multiplayer-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
+      <div class="modal-card" id="multiplayer-prejoin">
+        <h2>Мультиплеер</h2>
+        <form id="multiplayer-join-form" class="multiplayer-form">
+          <label class="scoreboard-label" for="multiplayer-name">Ваше имя</label>
+          <input id="multiplayer-name" name="multiplayer-name" type="text" maxlength="32" autocomplete="name" placeholder="Котолюбитель" required>
+          <label class="scoreboard-label" for="multiplayer-room">Название комнаты</label>
+          <input id="multiplayer-room" name="multiplayer-room" type="text" maxlength="32" placeholder="Например, kotiki" required>
+          <div class="modal-actions">
+            <button type="submit">Войти</button>
+            <button id="multiplayer-cancel" type="button">Назад</button>
+          </div>
+          <p id="multiplayer-error" class="multiplayer-error" role="alert"></p>
+        </form>
+      </div>
+      <div class="modal-card hidden" id="multiplayer-lobby" role="document">
+        <h2>Комната: <span id="multiplayer-room-label"></span></h2>
+        <p id="multiplayer-status" class="multiplayer-status" role="status"></p>
+        <ul id="multiplayer-player-list" class="multiplayer-player-list"></ul>
+        <div class="modal-actions">
+          <button id="multiplayer-ready" type="button">Готов</button>
+          <button id="multiplayer-leave" type="button">Выйти</button>
+        </div>
+      </div>
+    </div>
+    <div id="multiplayer-hud" class="multiplayer-hud hidden" aria-live="polite">
+      <div class="multiplayer-hud-header">
+        <div>Комната: <span id="multiplayer-hud-room"></span></div>
+        <div id="multiplayer-countdown" class="multiplayer-countdown"></div>
+      </div>
+      <ul id="multiplayer-hud-players" class="multiplayer-hud-players"></ul>
+      <div id="multiplayer-game-message" class="multiplayer-game-message"></div>
+    </div>
     <div class="hud">
       <div>Очки: <span id="score">0</span></div>
       <div>Время: <span id="timer">10.0</span> c</div>
