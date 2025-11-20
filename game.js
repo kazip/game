@@ -133,6 +133,14 @@ const multiplayerHudRoom = document.getElementById("multiplayer-hud-room");
 const multiplayerCountdownEl = document.getElementById("multiplayer-countdown");
 const multiplayerHudPlayers = document.getElementById("multiplayer-hud-players");
 const multiplayerGameMessage = document.getElementById("multiplayer-game-message");
+const multiplayerRoomList = document.getElementById("multiplayer-room-list");
+const multiplayerRoomEmpty = document.getElementById("multiplayer-room-empty");
+const multiplayerRoomRefreshBtn = document.getElementById("multiplayer-room-refresh");
+const multiplayerChatPanel = document.getElementById("multiplayer-chat");
+const multiplayerChatMessages = document.getElementById("multiplayer-chat-messages");
+const multiplayerChatForm = document.getElementById("multiplayer-chat-form");
+const multiplayerChatInput = document.getElementById("multiplayer-chat-input");
+const multiplayerChatRoomLabel = document.getElementById("multiplayer-chat-room");
 
 let gameMode = "menu";
 let multiplayerManager = null;
@@ -160,6 +168,7 @@ const supabaseConfigured =
 const supabaseClient = supabaseConfigured
   ? createClient(sanitizedSupabaseUrl, sanitizedSupabaseKey)
   : null;
+let multiplayerLobby = null;
 
 const PLAYER_NAME_STORAGE_KEY = "cat-game:player-name";
 const DEFAULT_SCORE_STATUS =
@@ -213,6 +222,7 @@ function showMultiplayerJoinForm() {
   if (multiplayerOverlay) {
     multiplayerOverlay.classList.remove("hidden");
   }
+  ensureLobbyConnected();
   if (multiplayerPrejoinCard) {
     multiplayerPrejoinCard.classList.remove("hidden");
   }
@@ -254,6 +264,99 @@ function hideMultiplayerOverlay() {
   }
 }
 
+function showMultiplayerChat(roomName = "") {
+  if (!multiplayerChatPanel) {
+    return;
+  }
+  multiplayerChatPanel.classList.remove("hidden");
+  if (multiplayerChatRoomLabel) {
+    multiplayerChatRoomLabel.textContent = roomName ? `Комната ${roomName}` : "";
+  }
+}
+
+function hideMultiplayerChat() {
+  if (multiplayerChatPanel) {
+    multiplayerChatPanel.classList.add("hidden");
+  }
+  renderChatMessages([]);
+  if (multiplayerChatRoomLabel) {
+    multiplayerChatRoomLabel.textContent = "";
+  }
+}
+
+function renderChatMessages(messages) {
+  if (!multiplayerChatMessages) {
+    return;
+  }
+  multiplayerChatMessages.innerHTML = "";
+  if (!messages || messages.length === 0) {
+    const empty = document.createElement("li");
+    empty.textContent = "Сообщений пока нет";
+    multiplayerChatMessages.appendChild(empty);
+    return;
+  }
+
+  messages.slice(-50).forEach((message) => {
+    const item = document.createElement("li");
+    const timeLabel = message.at
+      ? new Date(message.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+      : "";
+    item.innerHTML = `<span class="multiplayer-chat-author">${escapeHtml(
+      message.name || "Игрок"
+    )}</span>: ${escapeHtml(message.text)} <span class="multiplayer-chat-time">${escapeHtml(
+      timeLabel
+    )}</span>`;
+    multiplayerChatMessages.appendChild(item);
+  });
+  multiplayerChatMessages.scrollTop = multiplayerChatMessages.scrollHeight;
+}
+
+function renderMultiplayerRoomList() {
+  if (!multiplayerRoomList || !multiplayerRoomEmpty) {
+    return;
+  }
+  const rooms = multiplayerLobby?.getRooms() || [];
+  multiplayerRoomList.innerHTML = "";
+  multiplayerRoomEmpty.classList.toggle("hidden", rooms.length > 0);
+
+  rooms.forEach((room) => {
+    const item = document.createElement("li");
+    const isJoinable = room.phase !== "playing" && room.phase !== "countdown";
+    item.classList.toggle("unavailable", !isJoinable);
+    const meta = document.createElement("div");
+    meta.className = "multiplayer-room-meta";
+    meta.innerHTML = `
+      <span class="multiplayer-room-name">${escapeHtml(room.roomName)}</span>
+      <span class="multiplayer-room-status">Игроков: ${room.playerCount} · Статус: ${
+        room.phase === "playing" ? "Идёт игра" : room.phase === "countdown" ? "Скоро старт" : "Ожидание"
+      }</span>
+    `;
+
+    const joinButton = document.createElement("button");
+    joinButton.type = "button";
+    joinButton.textContent = isJoinable ? "Подключиться" : "Недоступно";
+    joinButton.disabled = !isJoinable;
+    joinButton.dataset.roomName = room.roomName;
+
+    item.appendChild(meta);
+    item.appendChild(joinButton);
+    multiplayerRoomList.appendChild(item);
+  });
+}
+
+async function ensureLobbyConnected() {
+  if (!multiplayerLobby) {
+    return;
+  }
+  try {
+    await multiplayerLobby.connect();
+    multiplayerLobby.requestSync();
+    renderMultiplayerRoomList();
+  } catch (error) {
+    console.warn("Не удалось подключиться к лобби", error);
+  }
+}
+
 function showRestartButton() {
   if (restartBtn) {
     restartBtn.classList.remove("hidden");
@@ -276,6 +379,7 @@ async function leaveMultiplayerRoom({ backToMenu = false } = {}) {
     multiplayerManager = null;
   }
   multiplayerHud?.classList.add("hidden");
+  hideMultiplayerChat();
   showRestartButton();
   if (backToMenu) {
     showModeSelection();
@@ -292,12 +396,13 @@ async function joinMultiplayerRoom(roomName, playerName) {
     await leaveMultiplayerRoom();
   }
   clearStatusEffect();
-  multiplayerManager = new MultiplayerManager();
+  multiplayerManager = new MultiplayerManager(multiplayerLobby);
   await multiplayerManager.join(roomName, playerName);
   safeStoreName(playerName);
   multiplayerManager.updateInputFromControls();
   hideModeSelection();
   showMultiplayerLobby();
+  showMultiplayerChat(roomName);
   hideRestartButton();
   messageEl.textContent = "";
   timerEl.textContent = "0.0";
@@ -2014,8 +2119,161 @@ function createMultiplayerServerDependencies() {
   };
 }
 
+class MultiplayerLobby {
+  constructor(client) {
+    this.client = client;
+    this.channel = null;
+    this.rooms = new Map();
+    this.listeners = new Set();
+    this.providers = new Map();
+    this.clientId = generateClientId();
+  }
+
+  addListener(listener) {
+    if (listener) {
+      this.listeners.add(listener);
+    }
+  }
+
+  notifyListeners() {
+    this.listeners.forEach((listener) => {
+      try {
+        listener(this.getRooms());
+      } catch (error) {
+        console.warn("Ошибка обработчика лобби", error);
+      }
+    });
+  }
+
+  getRooms() {
+    return Array.from(this.rooms.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }
+
+  async connect() {
+    if (this.channel || !this.client) {
+      return;
+    }
+    this.channel = this.client.channel("cat-mp:lobby", {
+      config: { presence: { key: this.clientId } }
+    });
+
+    this.channel.on("broadcast", { event: "room-state" }, ({ payload }) => {
+      this.handleRoomState(payload);
+    });
+    this.channel.on("broadcast", { event: "room-closed" }, ({ payload }) => {
+      this.handleRoomClosed(payload);
+    });
+    this.channel.on("broadcast", { event: "request-sync" }, () => {
+      this.broadcastKnownRooms();
+    });
+
+    const { error } = await this.channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        this.channel.track({ clientId: this.clientId, connectedAt: Date.now() }).catch(() => {});
+        this.requestSync();
+      }
+    });
+    if (error) {
+      throw error;
+    }
+  }
+
+  async disconnect() {
+    if (this.channel) {
+      try {
+        await this.channel.untrack();
+      } catch (error) {
+        // ignore
+      }
+      try {
+        await this.channel.unsubscribe();
+      } catch (error) {
+        // ignore
+      }
+    }
+    this.channel = null;
+  }
+
+  requestSync() {
+    if (!this.channel) {
+      return;
+    }
+    this.channel.send({ type: "broadcast", event: "request-sync", payload: { requester: this.clientId } });
+  }
+
+  publishRoomState(roomName, state) {
+    if (!this.channel || !roomName || !state) {
+      return;
+    }
+    const entry = {
+      roomName,
+      phase: state.phase || "lobby",
+      playerCount: (state.players || []).length,
+      updatedAt: Date.now()
+    };
+    this.rooms.set(roomName, entry);
+    this.channel.send({ type: "broadcast", event: "room-state", payload: entry });
+    this.notifyListeners();
+  }
+
+  publishRoomClosed(roomName) {
+    if (!this.channel || !roomName) {
+      return;
+    }
+    this.rooms.delete(roomName);
+    this.channel.send({ type: "broadcast", event: "room-closed", payload: { roomName } });
+    this.notifyListeners();
+  }
+
+  handleRoomState(payload) {
+    if (!payload || !payload.roomName) {
+      return;
+    }
+    this.rooms.set(payload.roomName, payload);
+    this.notifyListeners();
+  }
+
+  handleRoomClosed(payload) {
+    if (!payload?.roomName) {
+      return;
+    }
+    this.rooms.delete(payload.roomName);
+    this.notifyListeners();
+  }
+
+  registerActiveRoom(roomName, stateGetter) {
+    if (!roomName || typeof stateGetter !== "function") {
+      return;
+    }
+    this.providers.set(roomName, stateGetter);
+    const state = stateGetter();
+    if (state) {
+      this.publishRoomState(roomName, state);
+    }
+  }
+
+  unregisterActiveRoom(roomName, { broadcast = true } = {}) {
+    if (!roomName) {
+      return;
+    }
+    this.providers.delete(roomName);
+    if (broadcast) {
+      this.publishRoomClosed(roomName);
+    }
+  }
+
+  broadcastKnownRooms() {
+    this.providers.forEach((getter, roomName) => {
+      const state = getter();
+      if (state) {
+        this.publishRoomState(roomName, state);
+      }
+    });
+  }
+}
+
 class MultiplayerManager {
-  constructor() {
+  constructor(lobby) {
     this.playerId = generateClientId();
     this.playerName = "";
     this.roomName = "";
@@ -2030,6 +2288,8 @@ class MultiplayerManager {
     this.presenceMeta = null;
     this.cachedPresence = null;
     this.renderFrameBound = (timestamp) => this.renderFrame(timestamp);
+    this.chatMessages = [];
+    this.lobby = lobby;
   }
 
   sendPresenceUpdate(meta) {
@@ -2063,6 +2323,7 @@ class MultiplayerManager {
     }
     this.roomName = roomName;
     this.playerName = playerName;
+    this.resetChat();
     this.presenceMeta = {
       playerId: this.playerId,
       name: this.playerName,
@@ -2084,6 +2345,7 @@ class MultiplayerManager {
   }
 
   async leave() {
+    const wasHost = this.isHost;
     this.stopRenderLoop();
     if (this.server) {
       this.server.destroy();
@@ -2106,6 +2368,10 @@ class MultiplayerManager {
     this.isHost = false;
     this.ready = false;
     this.cachedPresence = null;
+    this.resetChat();
+    if (wasHost && this.lobby) {
+      this.lobby.unregisterActiveRoom(this.roomName);
+    }
     this.updateReadyButton();
     this.updateHud();
   }
@@ -2126,6 +2392,9 @@ class MultiplayerManager {
       if (this.isHost && this.server) {
         this.server.handlePlayerInput(payload.playerId, payload.vector);
       }
+    });
+    this.channel.on("broadcast", { event: "chat-message" }, ({ payload }) => {
+      this.handleChatMessage(payload);
     });
     this.channel.on("presence", { event: "sync" }, () => {
       this.handlePresenceSync();
@@ -2188,6 +2457,9 @@ class MultiplayerManager {
     this.server = new MultiplayerServer(this, createMultiplayerServerDependencies());
     this.server.syncPresence(this.channel.presenceState());
     this.server.startTicking();
+    if (this.lobby) {
+      this.lobby.registerActiveRoom(this.roomName, () => this.state);
+    }
   }
 
   stopHosting() {
@@ -2195,6 +2467,9 @@ class MultiplayerManager {
       return;
     }
     this.isHost = false;
+    if (this.lobby) {
+      this.lobby.unregisterActiveRoom(this.roomName, { broadcast: false });
+    }
     if (this.server) {
       this.server.destroy();
       this.server = null;
@@ -2215,6 +2490,9 @@ class MultiplayerManager {
       payload: state
     });
     this.handleServerState(state);
+    if (this.lobby && this.isHost) {
+      this.lobby.publishRoomState(this.roomName, state);
+    }
   }
 
   handleServerState(state) {
@@ -2298,6 +2576,46 @@ class MultiplayerManager {
       multiplayerReadyBtn.textContent = this.ready ? "Не готов" : "Готов";
       multiplayerReadyBtn.disabled = !this.channel;
     }
+  }
+
+  resetChat() {
+    this.chatMessages = [];
+    renderChatMessages(this.chatMessages);
+  }
+
+  handleChatMessage(payload) {
+    if (!payload || !payload.text) {
+      return;
+    }
+    const entry = {
+      playerId: payload.playerId,
+      name: payload.name || "Игрок",
+      text: String(payload.text).slice(0, 240),
+      at: payload.at || Date.now()
+    };
+    this.chatMessages.push(entry);
+    if (this.chatMessages.length > 60) {
+      this.chatMessages = this.chatMessages.slice(-60);
+    }
+    renderChatMessages(this.chatMessages);
+  }
+
+  sendChatMessage(text) {
+    if (!this.channel) {
+      return;
+    }
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return;
+    }
+    const payload = {
+      playerId: this.playerId,
+      name: this.playerName || "Игрок",
+      text: trimmed.slice(0, 240),
+      at: Date.now()
+    };
+    this.channel.send({ type: "broadcast", event: "chat-message", payload });
+    this.handleChatMessage(payload);
   }
 
   sendInput(vector) {
@@ -2435,6 +2753,11 @@ class MultiplayerManager {
   }
 }
 
+if (supabaseClient) {
+  multiplayerLobby = new MultiplayerLobby(supabaseClient);
+  multiplayerLobby.addListener(() => renderMultiplayerRoomList());
+}
+
 
 function loop(timestamp) {
   if (gameMode !== "single" || gameOver) return;
@@ -2511,6 +2834,36 @@ if (startMultiplayerBtn) {
   });
 }
 
+if (multiplayerRoomRefreshBtn) {
+  multiplayerRoomRefreshBtn.addEventListener("click", () => {
+    ensureLobbyConnected();
+  });
+}
+
+if (multiplayerRoomList) {
+  multiplayerRoomList.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    const roomName = target.dataset?.roomName;
+    if (!roomName) {
+      return;
+    }
+    if (multiplayerRoomInput) {
+      multiplayerRoomInput.value = roomName;
+    }
+    if (multiplayerNameInput && !multiplayerNameInput.value && playerNameInput?.value) {
+      multiplayerNameInput.value = playerNameInput.value;
+    }
+    if (multiplayerJoinForm?.requestSubmit) {
+      multiplayerJoinForm.requestSubmit();
+    } else if (multiplayerJoinForm) {
+      multiplayerJoinForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    }
+  });
+}
+
 if (multiplayerCancelBtn) {
   multiplayerCancelBtn.addEventListener("click", async () => {
     await leaveMultiplayerRoom({ backToMenu: true });
@@ -2550,6 +2903,14 @@ if (multiplayerJoinForm) {
     const normalizedName = rawName.slice(0, 32);
     const normalizedRoom = rawRoom.slice(0, 32);
 
+    const existingRoom = multiplayerLobby
+      ?.getRooms()
+      .find((room) => room.roomName.toLowerCase() === normalizedRoom.toLowerCase());
+    if (existingRoom && (existingRoom.phase === "playing" || existingRoom.phase === "countdown")) {
+      multiplayerErrorEl.textContent = "К этой комнате нельзя подключиться во время игры.";
+      return;
+    }
+
     multiplayerJoinInProgress = true;
     multiplayerErrorEl.textContent = "";
     try {
@@ -2580,6 +2941,24 @@ if (multiplayerLeaveBtn) {
     await leaveMultiplayerRoom({ backToMenu: true });
     hideMultiplayerOverlay();
     showModeSelection();
+  });
+}
+
+if (multiplayerChatForm) {
+  multiplayerChatForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (gameMode !== "multiplayer" || !multiplayerManager) {
+      return;
+    }
+    const text = multiplayerChatInput ? multiplayerChatInput.value.trim() : "";
+    if (!text) {
+      return;
+    }
+    multiplayerManager.sendChatMessage(text);
+    if (multiplayerChatInput) {
+      multiplayerChatInput.value = "";
+      multiplayerChatInput.focus();
+    }
   });
 }
 
