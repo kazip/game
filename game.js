@@ -122,6 +122,7 @@ const multiplayerRoomInput = document.getElementById("multiplayer-room");
 const multiplayerErrorEl = document.getElementById("multiplayer-error");
 const multiplayerCancelBtn = document.getElementById("multiplayer-cancel");
 const multiplayerLobbyCard = document.getElementById("multiplayer-lobby");
+const multiplayerLobbyShell = document.getElementById("multiplayer-lobby-shell");
 const multiplayerPrejoinCard = document.getElementById("multiplayer-prejoin");
 const multiplayerRoomLabel = document.getElementById("multiplayer-room-label");
 const multiplayerStatusEl = document.getElementById("multiplayer-status");
@@ -226,9 +227,13 @@ function showMultiplayerJoinForm() {
   if (multiplayerPrejoinCard) {
     multiplayerPrejoinCard.classList.remove("hidden");
   }
+  if (multiplayerLobbyShell) {
+    multiplayerLobbyShell.classList.add("hidden");
+  }
   if (multiplayerLobbyCard) {
     multiplayerLobbyCard.classList.add("hidden");
   }
+  hideMultiplayerChat();
   if (multiplayerErrorEl) {
     multiplayerErrorEl.textContent = "";
   }
@@ -246,6 +251,9 @@ function showMultiplayerLobby() {
   }
   if (multiplayerPrejoinCard) {
     multiplayerPrejoinCard.classList.add("hidden");
+  }
+  if (multiplayerLobbyShell) {
+    multiplayerLobbyShell.classList.remove("hidden");
   }
   if (multiplayerLobbyCard) {
     multiplayerLobbyCard.classList.remove("hidden");
@@ -274,11 +282,13 @@ function showMultiplayerChat(roomName = "") {
   }
 }
 
-function hideMultiplayerChat() {
+function hideMultiplayerChat({ reset = true } = {}) {
   if (multiplayerChatPanel) {
     multiplayerChatPanel.classList.add("hidden");
   }
-  renderChatMessages([]);
+  if (reset) {
+    renderChatMessages([]);
+  }
   if (multiplayerChatRoomLabel) {
     multiplayerChatRoomLabel.textContent = "";
   }
@@ -2503,10 +2513,12 @@ class MultiplayerManager {
     syncMultiplayerStatusEffect(state.statusEffect);
     if (state.phase === "playing" || state.phase === "countdown") {
       hideMultiplayerOverlay();
+      hideMultiplayerChat({ reset: false });
       hideRestartButton();
     } else if (state.phase === "ended") {
       showMultiplayerOverlay();
       showMultiplayerLobby();
+      showMultiplayerChat(this.roomName);
       showRestartButton();
     }
     this.updateHud();
