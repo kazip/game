@@ -38,6 +38,7 @@ export class MultiplayerServer {
         remaining: 0
       },
       goldenChainActive: false,
+      statusEffect: null,
       winnerId: null,
       serverTime: Date.now()
     };
@@ -149,6 +150,7 @@ export class MultiplayerServer {
       this.state.winnerId = null;
       this.state.fish.alive = false;
       this.state.message = "Ожидаем игроков";
+      this.state.statusEffect = null;
       this.state.players.forEach((p) => {
         p.ready = false;
         p.alive = false;
@@ -160,6 +162,7 @@ export class MultiplayerServer {
       this.state.phase = "lobby";
       this.state.countdown = 0;
       this.state.message = "Ожидаем игроков";
+      this.state.statusEffect = null;
       this.state.players.forEach((p) => {
         p.ready = p.id === playerId ? false : p.ready;
       });
@@ -238,6 +241,7 @@ export class MultiplayerServer {
     const { POWER_UP_BASE_SIZE } = this.deps;
     this.state.walls = [];
     this.state.mines = [];
+    this.state.statusEffect = null;
     this.state.powerUp = {
       x: 0,
       y: 0,
@@ -482,10 +486,89 @@ export class MultiplayerServer {
       const distance = Math.hypot(player.x - this.state.powerUp.x, player.y - this.state.powerUp.y);
       if (distance < (player.size + this.state.powerUp.size) / 2) {
         this.clearPowerUp();
+        this.applyRandomStatusEffect();
         return true;
       }
     }
     return false;
+  }
+
+  getSpeedMultiplier() {
+    const effectType = this.state.statusEffect?.type;
+    if (effectType === "speedUp") {
+      return 2;
+    }
+    if (effectType === "speedDown") {
+      return 1 / 1.5;
+    }
+    return 1;
+  }
+
+  getBaseTimeLimit(fishType) {
+    const { GOLDEN_FISH_TIME_LIMIT, NORMAL_FISH_TIME_LIMIT } = this.deps;
+    return fishType === "golden" ? GOLDEN_FISH_TIME_LIMIT : NORMAL_FISH_TIME_LIMIT;
+  }
+
+  getTimeLimitForFish(fishType) {
+    const { TIME_INCREASE_LIMIT, TIME_DECREASE_LIMIT } = this.deps;
+    const effectType = this.state.statusEffect?.type;
+    if (effectType === "timeIncrease") {
+      return TIME_INCREASE_LIMIT;
+    }
+    if (effectType === "timeDecrease") {
+      return TIME_DECREASE_LIMIT;
+    }
+    return this.getBaseTimeLimit(fishType);
+  }
+
+  applyStatusEffect(effectType) {
+    const { POWER_UP_DURATION, TIME_INCREASE_LIMIT, TIME_DECREASE_LIMIT } = this.deps;
+    if (!effectType) {
+      this.state.statusEffect = null;
+      return false;
+    }
+    this.state.statusEffect = {
+      type: effectType,
+      remaining: POWER_UP_DURATION
+    };
+    if (effectType === "timeIncrease") {
+      this.state.remaining = Math.max(this.state.remaining, TIME_INCREASE_LIMIT);
+    } else if (effectType === "timeDecrease") {
+      this.state.remaining = Math.min(this.state.remaining, TIME_DECREASE_LIMIT);
+    }
+    return true;
+  }
+
+  applyRandomStatusEffect() {
+    const types = this.deps.STATUS_EFFECT_TYPES || [];
+    if (!types.length) {
+      this.state.statusEffect = null;
+      return false;
+    }
+    const index = Math.floor(this.random() * types.length);
+    const type = types[index];
+    return this.applyStatusEffect(type);
+  }
+
+  updateStatusEffect(delta) {
+    if (!this.state.statusEffect) {
+      return false;
+    }
+    this.state.statusEffect.remaining -= delta;
+    if (this.state.statusEffect.remaining > 0) {
+      return false;
+    }
+    const endedType = this.state.statusEffect.type;
+    this.state.statusEffect = null;
+    if (endedType === "timeIncrease" || endedType === "timeDecrease") {
+      const baseLimit = this.getBaseTimeLimit(this.state.fish.type);
+      if (endedType === "timeIncrease") {
+        this.state.remaining = Math.min(this.state.remaining, baseLimit);
+      } else {
+        this.state.remaining = Math.max(this.state.remaining, baseLimit);
+      }
+    }
+    return true;
   }
 
   tick() {
@@ -524,6 +607,12 @@ export class MultiplayerServer {
     this.state.remaining = Math.max(0, (this.state.remaining || 0) - delta);
     let stateChanged = false;
 
+    if (this.updateStatusEffect(delta)) {
+      stateChanged = true;
+    }
+
+    const speedMultiplier = this.getSpeedMultiplier();
+
     if (this.updatePowerUp(delta)) {
       stateChanged = true;
     }
@@ -539,14 +628,14 @@ export class MultiplayerServer {
         const cappedMagnitude = Math.min(length, 1);
         const normalizedX = input.x / (length || 1);
         const normalizedY = input.y / (length || 1);
-        const distance = CAT_BASE_SPEED * delta * cappedMagnitude;
+        const distance = CAT_BASE_SPEED * speedMultiplier * delta * cappedMagnitude;
         player.x += normalizedX * distance;
         player.y += normalizedY * distance;
         player.moving = true;
         if (Math.abs(normalizedX) > 0.1) {
           player.facing = normalizedX >= 0 ? 1 : -1;
         }
-        const walkIncrement = delta * WALK_FREQUENCY * cappedMagnitude;
+        const walkIncrement = delta * WALK_FREQUENCY * cappedMagnitude * speedMultiplier;
         player.walkCycle = (player.walkCycle + walkIncrement) % 1;
         player.stepAccumulator += walkIncrement;
         while (player.stepAccumulator >= 0.5) {
@@ -617,7 +706,6 @@ export class MultiplayerServer {
     const {
       WORLD_SIZE,
       GOLDEN_FISH_CHANCE,
-      getFishTimeLimitForFish,
       positionToGridCell,
       circleIntersectsAnyWall
     } = this.deps;
@@ -675,7 +763,7 @@ export class MultiplayerServer {
       this.refreshPowerUp();
     }
 
-    this.state.remaining = getFishTimeLimitForFish(fishState.type);
+    this.state.remaining = this.getTimeLimitForFish(fishState.type);
   }
 
   countAlivePlayers() {
@@ -700,6 +788,7 @@ export class MultiplayerServer {
     this.state.winnerId = winnerId || null;
     this.state.countdown = 0;
     this.state.fish.alive = false;
+    this.state.statusEffect = null;
     this.broadcastState(true);
   }
 
@@ -720,6 +809,9 @@ export class MultiplayerServer {
       message: this.state.message,
       winnerId: this.state.winnerId,
       goldenChainActive: this.state.goldenChainActive,
+      statusEffect: this.state.statusEffect
+        ? { type: this.state.statusEffect.type, remaining: this.state.statusEffect.remaining }
+        : null,
       fish: { ...this.state.fish },
       powerUp: { ...this.state.powerUp },
       walls: this.state.walls.map((wall) => ({ ...wall })),
