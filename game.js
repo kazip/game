@@ -2218,6 +2218,7 @@ class MultiplayerManager {
       hideMultiplayerOverlay();
       hideRestartButton();
     } else if (state.phase === "ended") {
+      showMultiplayerOverlay();
       showMultiplayerLobby();
       showRestartButton();
     }
@@ -2473,6 +2474,7 @@ restartBtn.addEventListener("click", () => {
     multiplayerManager &&
     multiplayerManager.state?.phase === "ended"
   ) {
+    showMultiplayerOverlay();
     showMultiplayerLobby();
     multiplayerManager.updateLobbyUI();
     return;
