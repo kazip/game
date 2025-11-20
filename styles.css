@@ -267,17 +267,17 @@ canvas {
 
 .appearance-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
 }
 
 .appearance-field {
   display: grid;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 4px;
+  padding: 8px 10px;
   background: #fff;
   border: 1px solid rgba(20, 54, 93, 0.12);
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
 }
 
@@ -289,10 +289,59 @@ canvas {
 .appearance-field input,
 .appearance-field select {
   width: 100%;
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: 6px 8px;
+  min-height: 34px;
+  border-radius: 7px;
   border: 1px solid rgba(20, 54, 93, 0.15);
   font-size: 0.95rem;
+}
+
+.appearance-field input[type="color"] {
+  padding: 0;
+  height: 34px;
+}
+
+.appearance-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.85fr) 1.15fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.appearance-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.appearance-preview-card {
+  background: #fff;
+  border: 1px solid rgba(20, 54, 93, 0.12);
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+}
+
+.appearance-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#cat-preview {
+  width: 100%;
+  height: auto;
+  max-height: 220px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f5f7ff 0%, #eef3ff 100%);
+  border: 1px solid rgba(20, 54, 93, 0.1);
+}
+
+@media (max-width: 640px) {
+  .appearance-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 .modal-overlay {
