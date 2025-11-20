@@ -13,6 +13,19 @@ const WALL_THICKNESS = GRID_CELL_SIZE * 0.6;
 const MAX_WALL_TOTAL_LENGTH = 10;
 const gameContainer = document.querySelector(".game-container");
 
+const DEFAULT_CAT_APPEARANCE = {
+  baseColor: "#ffb347",
+  bellyColor: "#ffd59c",
+  eyeColor: "#14365d",
+  accessoryColor: "#3c78d8",
+  hat: "none",
+  boots: "none"
+};
+
+const CAT_APPEARANCE_STORAGE_KEY = "cat-game:appearance";
+const ALLOWED_HATS = ["none", "beanie", "cap", "crown"];
+const ALLOWED_BOOTS = ["none", "sneakers", "boots"];
+
 const cat = {
   x: WORLD_SIZE / 2,
   y: WORLD_SIZE / 2,
@@ -21,7 +34,8 @@ const cat = {
   facing: 1,
   moving: false,
   walkCycle: 0,
-  stepAccumulator: 0
+  stepAccumulator: 0,
+  appearance: { ...DEFAULT_CAT_APPEARANCE }
 };
 
 const CAT_BASE_SIZE = cat.size;
@@ -128,6 +142,12 @@ const settingsOverlay = document.getElementById("settings-overlay");
 const settingsBackBtn = document.getElementById("settings-back");
 const soundToggleInput = document.getElementById("setting-sound");
 const musicToggleInput = document.getElementById("setting-music");
+const catColorBaseInput = document.getElementById("cat-color-base");
+const catColorBellyInput = document.getElementById("cat-color-belly");
+const catColorEyesInput = document.getElementById("cat-color-eyes");
+const catColorAccessoryInput = document.getElementById("cat-color-accessory");
+const catHatSelect = document.getElementById("cat-hat");
+const catBootsSelect = document.getElementById("cat-boots");
 const modeOverlay = document.getElementById("mode-overlay");
 const startSingleBtn = document.getElementById("start-single");
 const startMultiplayerBtn = document.getElementById("start-multiplayer");
@@ -200,6 +220,29 @@ const scoreboardState = {
 
 updateStatusEffectIndicator();
 
+function sanitizeColor(value, fallback) {
+  if (typeof value === "string" && /^#([0-9a-fA-F]{6})$/.test(value.trim())) {
+    return value.trim();
+  }
+  return fallback;
+}
+
+function sanitizeAppearance(rawAppearance) {
+  const base = { ...DEFAULT_CAT_APPEARANCE };
+  if (!rawAppearance || typeof rawAppearance !== "object") {
+    return base;
+  }
+  const merged = { ...base, ...rawAppearance };
+  return {
+    baseColor: sanitizeColor(merged.baseColor, base.baseColor),
+    bellyColor: sanitizeColor(merged.bellyColor, base.bellyColor),
+    eyeColor: sanitizeColor(merged.eyeColor, base.eyeColor),
+    accessoryColor: sanitizeColor(merged.accessoryColor, base.accessoryColor),
+    hat: ALLOWED_HATS.includes(merged.hat) ? merged.hat : base.hat,
+    boots: ALLOWED_BOOTS.includes(merged.boots) ? merged.boots : base.boots
+  };
+}
+
 function safeGetStoredName() {
   try {
     return window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY) || "";
@@ -235,6 +278,69 @@ function safeStoreBoolean(key, value) {
     // Ignore storage errors silently.
   }
 }
+
+function safeGetStoredObject(key, defaultValue) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      return defaultValue;
+    }
+    const parsed = JSON.parse(raw);
+    return parsed ?? defaultValue;
+  } catch (error) {
+    return defaultValue;
+  }
+}
+
+function safeStoreObject(key, value) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    // Ignore storage errors silently.
+  }
+}
+
+function loadCatAppearanceFromStorage() {
+  const stored = safeGetStoredObject(CAT_APPEARANCE_STORAGE_KEY, DEFAULT_CAT_APPEARANCE);
+  return sanitizeAppearance(stored);
+}
+
+function applyAppearanceToInputs(appearance) {
+  if (!appearance) {
+    return;
+  }
+  if (catColorBaseInput) {
+    catColorBaseInput.value = appearance.baseColor;
+  }
+  if (catColorBellyInput) {
+    catColorBellyInput.value = appearance.bellyColor;
+  }
+  if (catColorEyesInput) {
+    catColorEyesInput.value = appearance.eyeColor;
+  }
+  if (catColorAccessoryInput) {
+    catColorAccessoryInput.value = appearance.accessoryColor;
+  }
+  if (catHatSelect) {
+    catHatSelect.value = appearance.hat;
+  }
+  if (catBootsSelect) {
+    catBootsSelect.value = appearance.boots;
+  }
+}
+
+function updateCatAppearance(changes = {}) {
+  const nextAppearance = sanitizeAppearance({ ...cat.appearance, ...changes });
+  cat.appearance = nextAppearance;
+  safeStoreObject(CAT_APPEARANCE_STORAGE_KEY, nextAppearance);
+  applyAppearanceToInputs(nextAppearance);
+  if (gameMode === "multiplayer" && multiplayerManager) {
+    multiplayerManager.updateAppearance(nextAppearance);
+  }
+}
+
+cat.appearance = loadCatAppearanceFromStorage();
+applyAppearanceToInputs(cat.appearance);
 
 function setScoreStatus(text = "") {
   if (scoreStatusEl) {
@@ -1965,6 +2071,77 @@ function update(delta) {
   }
 }
 
+function drawBoot(x, y, color, style, size = CAT_BASE_SIZE) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = color;
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.12)";
+  ctx.lineWidth = 1.2;
+  const width = size * 0.18;
+  const height = size * 0.1;
+  ctx.beginPath();
+  ctx.roundRect(-width / 2, -height / 2, width, height, 4);
+  ctx.fill();
+  ctx.stroke();
+
+  if (style === "sneakers") {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.fillRect(-width / 2 + 2, -2, width - 4, 3);
+    ctx.fillRect(-width / 2 + 2, 2, width - 4, 2);
+  } else if (style === "boots") {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.1)";
+    ctx.fillRect(-width / 2, height / 2 - 2, width, 3);
+  }
+  ctx.restore();
+}
+
+function drawHat(style, color, size) {
+  ctx.save();
+  ctx.translate(size * 0.05, -size * 0.35);
+  ctx.fillStyle = color;
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.14)";
+  ctx.lineWidth = 1.2;
+
+  if (style === "beanie") {
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 0.22, Math.PI, 0);
+    ctx.lineTo(size * 0.22, size * 0.04);
+    ctx.lineTo(-size * 0.22, size * 0.04);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, -size * 0.2, size * 0.05, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+  } else if (style === "cap") {
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 0.2, Math.PI, 0);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(size * 0.08, size * 0.03, size * 0.16, size * 0.06, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (style === "crown") {
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.16, size * 0.02);
+    ctx.lineTo(-size * 0.08, -size * 0.18);
+    ctx.lineTo(0, size * 0.02);
+    ctx.lineTo(size * 0.08, -size * 0.18);
+    ctx.lineTo(size * 0.16, size * 0.02);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#ffe95b";
+    ctx.beginPath();
+    ctx.arc(-size * 0.08, -size * 0.18, size * 0.025, 0, Math.PI * 2);
+    ctx.arc(size * 0.08, -size * 0.18, size * 0.025, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
 function drawCatSprite(catState) {
   if (!catState) {
     return;
@@ -1972,6 +2149,12 @@ function drawCatSprite(catState) {
   ctx.save();
   ctx.translate(catState.x, catState.y);
   ctx.scale(catState.facing ?? 1, 1);
+
+  const appearance = sanitizeAppearance(catState.appearance);
+  const baseColor = appearance.baseColor;
+  const bellyColor = appearance.bellyColor;
+  const eyeColor = appearance.eyeColor;
+  const accessoryColor = appearance.accessoryColor;
 
   const cycle = (catState.walkCycle || 0) * Math.PI * 2;
   const isMoving = Boolean(catState.moving);
@@ -1982,7 +2165,7 @@ function drawCatSprite(catState) {
   ctx.translate(-catState.size * 0.45, -catState.size * 0.1 + bobbing * 0.2);
   const tailSwing = isMoving ? Math.sin(cycle + Math.PI / 2) * 8 : 0;
   ctx.rotate((tailSwing * Math.PI) / 180);
-  ctx.fillStyle = "#ffb347";
+  ctx.fillStyle = baseColor;
   ctx.beginPath();
   ctx.ellipse(0, 0, catState.size * 0.35, catState.size * 0.12, 0, 0, Math.PI * 2);
   ctx.fill();
@@ -1991,62 +2174,56 @@ function drawCatSprite(catState) {
   ctx.translate(0, bobbing);
 
   // Back legs
-  ctx.fillStyle = "#f2a73a";
+  ctx.fillStyle = baseColor;
   for (let i = -1; i <= 1; i += 2) {
     const swing = isMoving ? Math.sin(cycle + (i < 0 ? 0 : Math.PI)) * 4 : 0;
+    const legX = i * catState.size * 0.23 + swing * 0.2;
+    const legY = catState.size * 0.42;
     ctx.beginPath();
-    ctx.ellipse(
-      i * catState.size * 0.23 + swing * 0.2,
-      catState.size * 0.42,
-      catState.size * 0.18,
-      catState.size * 0.14,
-      0,
-      0,
-      Math.PI * 2
-    );
+    ctx.ellipse(legX, legY, catState.size * 0.18, catState.size * 0.14, 0, 0, Math.PI * 2);
     ctx.fill();
+    if (appearance.boots !== "none") {
+      drawBoot(legX, legY + catState.size * 0.07, accessoryColor, appearance.boots, catState.size);
+    }
   }
 
   // Body
-  ctx.fillStyle = "#ffb347";
+  ctx.fillStyle = baseColor;
   ctx.beginPath();
   ctx.ellipse(0, 0, catState.size / 2, catState.size / 2.3, 0, 0, Math.PI * 2);
   ctx.fill();
 
   // Belly
-  ctx.fillStyle = "#ffd59c";
+  ctx.fillStyle = bellyColor;
   ctx.beginPath();
   ctx.ellipse(0, catState.size * 0.1, catState.size * 0.32, catState.size * 0.28, 0, 0, Math.PI * 2);
   ctx.fill();
 
   // Front legs
-  ctx.fillStyle = "#ffb347";
+  ctx.fillStyle = baseColor;
   for (let i = -1; i <= 1; i += 2) {
     const phase = i < 0 ? Math.PI : 0;
     const swing = isMoving ? Math.sin(cycle + phase) * 4 : 0;
+    const legX = i * catState.size * 0.25 - swing * 0.2;
+    const legY = catState.size * 0.44;
     ctx.beginPath();
-    ctx.ellipse(
-      i * catState.size * 0.25 - swing * 0.2,
-      catState.size * 0.44,
-      catState.size * 0.16,
-      catState.size * 0.15,
-      0,
-      0,
-      Math.PI * 2
-    );
+    ctx.ellipse(legX, legY, catState.size * 0.16, catState.size * 0.15, 0, 0, Math.PI * 2);
     ctx.fill();
+    if (appearance.boots !== "none") {
+      drawBoot(legX, legY + catState.size * 0.08, accessoryColor, appearance.boots, catState.size);
+    }
   }
 
   // Head
   ctx.save();
   ctx.translate(catState.size * 0.26, -catState.size * 0.1);
-  ctx.fillStyle = "#ffb347";
+  ctx.fillStyle = baseColor;
   ctx.beginPath();
   ctx.ellipse(0, 0, catState.size * 0.34, catState.size * 0.3, 0, 0, Math.PI * 2);
   ctx.fill();
 
   // Ears
-  ctx.fillStyle = "#ffb347";
+  ctx.fillStyle = baseColor;
   ctx.beginPath();
   ctx.moveTo(-catState.size * 0.18, -catState.size * 0.22);
   ctx.lineTo(-catState.size * 0.08, -catState.size * 0.42);
@@ -2062,7 +2239,7 @@ function drawCatSprite(catState) {
   ctx.fill();
 
   // Eyes
-  ctx.fillStyle = "#14365d";
+  ctx.fillStyle = eyeColor;
   ctx.beginPath();
   ctx.ellipse(
     -catState.size * 0.04,
@@ -2091,7 +2268,7 @@ function drawCatSprite(catState) {
   ctx.fill();
 
   // Nose and mouth
-  ctx.fillStyle = "#ff6f61";
+  ctx.fillStyle = accessoryColor;
   ctx.beginPath();
   ctx.moveTo(catState.size * 0.05, catState.size * 0.0);
   ctx.lineTo(catState.size * 0.02, catState.size * 0.05);
@@ -2099,7 +2276,7 @@ function drawCatSprite(catState) {
   ctx.closePath();
   ctx.fill();
 
-  ctx.strokeStyle = "#ff6f61";
+  ctx.strokeStyle = accessoryColor;
   ctx.lineWidth = 1.8;
   ctx.beginPath();
   ctx.moveTo(catState.size * 0.05, catState.size * 0.05);
@@ -2137,6 +2314,10 @@ function drawCatSprite(catState) {
   ctx.moveTo(catState.size * 0.13, catState.size * 0.07);
   ctx.lineTo(catState.size * 0.3, catState.size * 0.12);
   ctx.stroke();
+
+  if (appearance.hat && appearance.hat !== "none") {
+    drawHat(appearance.hat, accessoryColor, catState.size);
+  }
 
   ctx.restore();
 
@@ -2327,7 +2508,8 @@ function createMultiplayerServerDependencies() {
     POWER_UP_DURATION,
     TIME_INCREASE_LIMIT,
     TIME_DECREASE_LIMIT,
-    GOLDEN_FISH_TIME_LIMIT
+    GOLDEN_FISH_TIME_LIMIT,
+    sanitizeAppearance
   };
 }
 
@@ -2541,7 +2723,8 @@ class MultiplayerManager {
       name: this.playerName,
       joinedAt: Date.now(),
       isHost: false,
-      ready: false
+      ready: false,
+      appearance: sanitizeAppearance(cat.appearance)
     };
     this.channel = supabaseClient.channel(`cat-mp:${roomName}`, {
       config: { presence: { key: this.playerId } }
@@ -2782,6 +2965,22 @@ class MultiplayerManager {
     });
     if (this.isHost && this.server) {
       this.server.handlePlayerReady(this.playerId, this.ready);
+    }
+  }
+
+  updateAppearance(appearance) {
+    if (!appearance) {
+      return;
+    }
+    const sanitized = sanitizeAppearance(appearance);
+    if (this.presenceMeta) {
+      this.presenceMeta = { ...this.presenceMeta, appearance: sanitized };
+    }
+    if (this.channel && this.presenceMeta) {
+      this.sendPresenceUpdate(this.presenceMeta).catch(() => {});
+      if (this.isHost && this.server) {
+        this.server.syncPresence(this.channel.presenceState());
+      }
     }
   }
 
@@ -3084,6 +3283,42 @@ if (musicToggleInput) {
     if (enabled) {
       ensureAudioActive();
     }
+  });
+}
+
+if (catColorBaseInput) {
+  catColorBaseInput.addEventListener("input", () => {
+    updateCatAppearance({ baseColor: catColorBaseInput.value });
+  });
+}
+
+if (catColorBellyInput) {
+  catColorBellyInput.addEventListener("input", () => {
+    updateCatAppearance({ bellyColor: catColorBellyInput.value });
+  });
+}
+
+if (catColorEyesInput) {
+  catColorEyesInput.addEventListener("input", () => {
+    updateCatAppearance({ eyeColor: catColorEyesInput.value });
+  });
+}
+
+if (catColorAccessoryInput) {
+  catColorAccessoryInput.addEventListener("input", () => {
+    updateCatAppearance({ accessoryColor: catColorAccessoryInput.value });
+  });
+}
+
+if (catHatSelect) {
+  catHatSelect.addEventListener("change", () => {
+    updateCatAppearance({ hat: catHatSelect.value });
+  });
+}
+
+if (catBootsSelect) {
+  catBootsSelect.addEventListener("change", () => {
+    updateCatAppearance({ boots: catBootsSelect.value });
   });
 }
 
