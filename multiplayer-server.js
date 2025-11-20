@@ -192,6 +192,16 @@ export class MultiplayerServer {
     }
   }
 
+  handlePlayerAppearance(playerId, appearance) {
+    const { sanitizeAppearance } = this.deps;
+    const player = this.state.players.find((item) => item.id === playerId);
+    if (!player || typeof sanitizeAppearance !== "function") {
+      return;
+    }
+    player.appearance = sanitizeAppearance(appearance || player.appearance);
+    this.broadcastState(true);
+  }
+
   handlePlayerInput(playerId, vector) {
     const { clamp } = this.deps;
     if (!vector || typeof vector.x !== "number" || typeof vector.y !== "number") {

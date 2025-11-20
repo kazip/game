@@ -2788,6 +2788,11 @@ class MultiplayerManager {
         this.server.handlePlayerInput(payload.playerId, payload.vector);
       }
     });
+    this.channel.on("broadcast", { event: "player-appearance" }, ({ payload }) => {
+      if (this.isHost && this.server) {
+        this.server.handlePlayerAppearance(payload.playerId, payload.appearance);
+      }
+    });
     this.channel.on("broadcast", { event: "chat-message" }, ({ payload }) => {
       this.handleChatMessage(payload);
     });
@@ -2978,7 +2983,13 @@ class MultiplayerManager {
     }
     if (this.channel && this.presenceMeta) {
       this.sendPresenceUpdate(this.presenceMeta).catch(() => {});
+      this.channel.send({
+        type: "broadcast",
+        event: "player-appearance",
+        payload: { playerId: this.playerId, appearance: sanitized }
+      });
       if (this.isHost && this.server) {
+        this.server.handlePlayerAppearance(this.playerId, sanitized);
         this.server.syncPresence(this.channel.presenceState());
       }
     }
