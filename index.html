@@ -70,13 +70,34 @@
           </fieldset>
         </form>
       </div>
-      <div class="modal-card hidden" id="multiplayer-lobby" role="document">
-        <h2>Комната: <span id="multiplayer-room-label"></span></h2>
-        <p id="multiplayer-status" class="multiplayer-status" role="status"></p>
-        <ul id="multiplayer-player-list" class="multiplayer-player-list"></ul>
-        <div class="modal-actions">
-          <button id="multiplayer-ready" type="button">Готов</button>
-          <button id="multiplayer-leave" type="button">Выйти</button>
+      <div id="multiplayer-lobby-shell" class="multiplayer-lobby-shell hidden">
+        <div class="modal-card" id="multiplayer-lobby" role="document">
+          <h2>Комната: <span id="multiplayer-room-label"></span></h2>
+          <p id="multiplayer-status" class="multiplayer-status" role="status"></p>
+          <ul id="multiplayer-player-list" class="multiplayer-player-list"></ul>
+          <div class="modal-actions">
+            <button id="multiplayer-ready" type="button">Готов</button>
+            <button id="multiplayer-leave" type="button">Выйти</button>
+          </div>
+        </div>
+        <div id="multiplayer-chat" class="modal-card multiplayer-chat hidden" aria-live="polite">
+          <div class="multiplayer-chat-header">
+            <h3>Чат комнаты</h3>
+            <span id="multiplayer-chat-room" class="multiplayer-chat-room"></span>
+          </div>
+          <ul id="multiplayer-chat-messages" class="multiplayer-chat-messages"></ul>
+          <form id="multiplayer-chat-form" class="multiplayer-chat-form">
+            <label class="visually-hidden" for="multiplayer-chat-input">Сообщение</label>
+            <input
+              id="multiplayer-chat-input"
+              name="multiplayer-chat-input"
+              type="text"
+              maxlength="240"
+              placeholder="Написать сообщение"
+              autocomplete="off"
+            >
+            <button type="submit">Отправить</button>
+          </form>
         </div>
       </div>
     </div>
@@ -87,25 +108,6 @@
       </div>
       <ul id="multiplayer-hud-players" class="multiplayer-hud-players"></ul>
       <div id="multiplayer-game-message" class="multiplayer-game-message"></div>
-    </div>
-    <div id="multiplayer-chat" class="multiplayer-chat hidden" aria-live="polite">
-      <div class="multiplayer-chat-header">
-        <h3>Чат комнаты</h3>
-        <span id="multiplayer-chat-room" class="multiplayer-chat-room"></span>
-      </div>
-      <ul id="multiplayer-chat-messages" class="multiplayer-chat-messages"></ul>
-      <form id="multiplayer-chat-form" class="multiplayer-chat-form">
-        <label class="visually-hidden" for="multiplayer-chat-input">Сообщение</label>
-        <input
-          id="multiplayer-chat-input"
-          name="multiplayer-chat-input"
-          type="text"
-          maxlength="240"
-          placeholder="Написать сообщение"
-          autocomplete="off"
-        >
-        <button type="submit">Отправить</button>
-      </form>
     </div>
     <div class="hud">
       <div>Очки: <span id="score">0</span></div>
