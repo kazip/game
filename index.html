@@ -8,7 +8,8 @@
   <script>
     (function () {
       const versionMeta = document.querySelector('meta[name="build-version"]');
-      const cacheTag = versionMeta ? versionMeta.content.trim() : Date.now().toString();
+      const buildTag = versionMeta ? versionMeta.content.trim() : 'dev';
+      const cacheTag = `${buildTag}-${Date.now().toString()}`;
 
       const appendAsset = (tagName, attributes) => {
         const element = document.createElement(tagName);
