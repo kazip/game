@@ -10,6 +10,7 @@ export class MultiplayerServer {
       NORMAL_FISH_TIME_LIMIT,
       WORLD_SIZE,
       FISH_BASE_SIZE,
+      FISH_SWIM_SPEED,
       POWER_UP_BASE_SIZE,
       createSeededRng
     } = this.deps;
@@ -28,7 +29,8 @@ export class MultiplayerServer {
         y: WORLD_SIZE / 2,
         size: FISH_BASE_SIZE,
         alive: false,
-        type: "normal"
+        type: "normal",
+        direction: 1
       },
       powerUp: {
         x: 0,
@@ -435,11 +437,69 @@ export class MultiplayerServer {
     return true;
   }
 
+  doesFishCollideAt(xPosition) {
+    const { WORLD_SIZE, circleIntersectsAnyWall, circleIntersectsRect } = this.deps;
+    const radius = this.state.fish.size / 2;
+    if (xPosition - radius < 0 || xPosition + radius > WORLD_SIZE) {
+      return true;
+    }
+
+    if (circleIntersectsAnyWall(xPosition, this.state.fish.y, radius, this.state.walls)) {
+      return true;
+    }
+
+    if (this.state.powerUp.active) {
+      const half = this.state.powerUp.size / 2;
+      const powerUpRect = {
+        x: this.state.powerUp.x - half,
+        y: this.state.powerUp.y - half,
+        width: this.state.powerUp.size,
+        height: this.state.powerUp.size
+      };
+      if (circleIntersectsRect(xPosition, this.state.fish.y, radius, powerUpRect)) {
+        return true;
+      }
+    }
+
+    for (const mine of this.state.mines) {
+      const distanceToMine = Math.hypot(xPosition - mine.x, this.state.fish.y - mine.y);
+      if (distanceToMine < radius + mine.size / 2) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   clearPowerUp() {
     this.state.powerUp.active = false;
     this.state.powerUp.remaining = 0;
     this.state.powerUp.x = 0;
     this.state.powerUp.y = 0;
+  }
+
+  updateFishMovement(delta) {
+    const { FISH_SWIM_SPEED, clamp } = this.deps;
+    if (!this.state.fish.alive) {
+      return;
+    }
+
+    const swimStep = this.state.fish.direction * FISH_SWIM_SPEED * delta;
+    let nextX = this.state.fish.x + swimStep;
+
+    if (this.doesFishCollideAt(nextX)) {
+      this.state.fish.direction *= -1;
+      nextX = this.state.fish.x + this.state.fish.direction * FISH_SWIM_SPEED * delta;
+      if (this.doesFishCollideAt(nextX)) {
+        return;
+      }
+    }
+
+    this.state.fish.x = clamp(
+      nextX,
+      this.state.fish.size / 2,
+      this.deps.WORLD_SIZE - this.state.fish.size / 2
+    );
   }
 
   spawnPowerUp() {
@@ -617,6 +677,8 @@ export class MultiplayerServer {
       stateChanged = true;
     }
 
+    this.updateFishMovement(delta);
+
     this.state.players.forEach((player) => {
       if (!player.alive) {
         return;
@@ -715,6 +777,7 @@ export class MultiplayerServer {
       !forceNormal && (this.state.goldenChainActive || this.random() < GOLDEN_FISH_CHANCE);
     fishState.type = shouldSpawnGolden ? "golden" : "normal";
     this.state.goldenChainActive = shouldSpawnGolden;
+    fishState.direction = this.random() < 0.5 ? -1 : 1;
 
     const alivePlayers = this.state.players.filter((player) => player.alive);
     const referencePlayers =
