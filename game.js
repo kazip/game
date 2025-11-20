@@ -2263,6 +2263,7 @@ function createMultiplayerServerDependencies() {
   return {
     WORLD_SIZE,
     FISH_BASE_SIZE,
+    FISH_SWIM_SPEED,
     POWER_UP_BASE_SIZE,
     NORMAL_FISH_TIME_LIMIT,
     createSeededRng,
