@@ -242,6 +242,12 @@ function showMultiplayerLobby() {
   }
 }
 
+function showMultiplayerOverlay() {
+  if (multiplayerOverlay) {
+    multiplayerOverlay.classList.remove("hidden");
+  }
+}
+
 function hideMultiplayerOverlay() {
   if (multiplayerOverlay) {
     multiplayerOverlay.classList.add("hidden");
@@ -1037,6 +1043,9 @@ function ensureAudioActive() {
 }
 
 function normalizeKey(key) {
+  if (typeof key !== "string") {
+    return "";
+  }
   if (key.startsWith("Arrow")) {
     return key;
   }
@@ -2444,6 +2453,9 @@ function loop(timestamp) {
 
 window.addEventListener("keydown", (event) => {
   const key = normalizeKey(event.key);
+  if (!key) {
+    return;
+  }
   if (directionKeys.has(key)) {
     event.preventDefault();
   }
@@ -2456,6 +2468,9 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keyup", (event) => {
   const key = normalizeKey(event.key);
+  if (!key) {
+    return;
+  }
   keys.delete(key);
   if (gameMode === "multiplayer" && multiplayerManager) {
     multiplayerManager.updateInputFromControls();
