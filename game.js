@@ -34,10 +34,12 @@ const fish = {
   y: 0,
   size: 28,
   alive: false,
-  type: "normal"
+  type: "normal",
+  direction: 1
 };
 
 const FISH_BASE_SIZE = fish.size;
+const FISH_SWIM_SPEED = 36;
 
 const powerUp = {
   x: 0,
@@ -1305,6 +1307,58 @@ function circleIntersectsAnyWall(cx, cy, radius, candidateWalls = walls) {
   return candidateWalls.some((wall) => circleIntersectsRect(cx, cy, radius, wall));
 }
 
+function doesFishCollideAt(xPosition) {
+  const radius = fish.size / 2;
+  if (xPosition - radius < 0 || xPosition + radius > WORLD_SIZE) {
+    return true;
+  }
+
+  if (circleIntersectsAnyWall(xPosition, fish.y, radius)) {
+    return true;
+  }
+
+  if (powerUp.active) {
+    const half = powerUp.size / 2;
+    const powerUpRect = {
+      x: powerUp.x - half,
+      y: powerUp.y - half,
+      width: powerUp.size,
+      height: powerUp.size
+    };
+    if (circleIntersectsRect(xPosition, fish.y, radius, powerUpRect)) {
+      return true;
+    }
+  }
+
+  for (const mine of mines) {
+    const distanceToMine = Math.hypot(xPosition - mine.x, fish.y - mine.y);
+    if (distanceToMine < radius + mine.size / 2) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function updateFishMovement(delta) {
+  if (!fish.alive) {
+    return;
+  }
+
+  const swimStep = fish.direction * FISH_SWIM_SPEED * delta;
+  let nextX = fish.x + swimStep;
+
+  if (doesFishCollideAt(nextX)) {
+    fish.direction *= -1;
+    nextX = fish.x + fish.direction * FISH_SWIM_SPEED * delta;
+    if (doesFishCollideAt(nextX)) {
+      return;
+    }
+  }
+
+  fish.x = clamp(nextX, fish.size / 2, WORLD_SIZE - fish.size / 2);
+}
+
 function buildRandomWallSegments(catCell, fishCell) {
   const segments = [];
   const occupied = new Set();
@@ -1550,6 +1604,7 @@ function spawnFish() {
   const margin = 30;
   const shouldSpawnGolden = goldenChainActive || Math.random() < GOLDEN_FISH_CHANCE;
   fish.type = shouldSpawnGolden ? "golden" : "normal";
+  fish.direction = Math.random() < 0.5 ? -1 : 1;
   goldenChainActive = shouldSpawnGolden;
   const catCell = positionToGridCell(cat.x, cat.y);
   let placed = false;
@@ -1714,6 +1769,8 @@ function update(delta) {
   }
 
   if (fish.alive) {
+    updateFishMovement(delta);
+
     const dx = cat.x - fish.x;
     const dy = cat.y - fish.y;
     const distanceToFish = Math.hypot(dx, dy);
