@@ -60,6 +60,8 @@ const MINE_MIN_DISTANCE = 25;
 const POWER_UP_CHANCE = 0.05;
 const POWER_UP_LIFETIME = 5;
 const POWER_UP_DURATION = 30;
+const TIME_INCREASE_LIMIT = 15;
+const TIME_DECREASE_LIMIT = 5;
 
 const STATUS_EFFECTS = {
   speedUp: {
@@ -83,6 +85,7 @@ const STATUS_EFFECTS = {
 const STATUS_EFFECT_TYPES = Object.keys(STATUS_EFFECTS);
 
 let activeStatusEffect = null;
+let displayedStatusEffect = null;
 
 const keys = new Set();
 const NORMAL_FISH_TIME_LIMIT = 10;
@@ -271,6 +274,7 @@ async function leaveMultiplayerRoom({ backToMenu = false } = {}) {
   if (backToMenu) {
     showModeSelection();
   }
+  setDisplayedStatusEffect(null);
   messageEl.textContent = "";
   timerEl.textContent = NORMAL_FISH_TIME_LIMIT.toFixed(1);
   scoreEl.textContent = "0";
@@ -281,6 +285,7 @@ async function joinMultiplayerRoom(roomName, playerName) {
   if (multiplayerManager) {
     await leaveMultiplayerRoom();
   }
+  clearStatusEffect();
   multiplayerManager = new MultiplayerManager();
   await multiplayerManager.join(roomName, playerName);
   safeStoreName(playerName);
@@ -358,13 +363,13 @@ function updateStatusEffectIndicator() {
   if (!statusEffectIconEl) {
     return;
   }
-  if (!activeStatusEffect) {
+  if (!displayedStatusEffect) {
     statusEffectIconEl.textContent = "—";
     statusEffectIconEl.setAttribute("aria-label", "Нет эффектов");
     return;
   }
 
-  const effect = STATUS_EFFECTS[activeStatusEffect.type];
+  const effect = STATUS_EFFECTS[displayedStatusEffect.type];
   if (effect) {
     statusEffectIconEl.textContent = effect.icon;
     statusEffectIconEl.setAttribute("aria-label", effect.label);
@@ -373,7 +378,7 @@ function updateStatusEffectIndicator() {
 
 function clearStatusEffect() {
   activeStatusEffect = null;
-  updateStatusEffectIndicator();
+  setDisplayedStatusEffect(null);
 }
 
 function setStatusEffect(effectType) {
@@ -385,7 +390,7 @@ function setStatusEffect(effectType) {
     type: effectType,
     remaining: POWER_UP_DURATION
   };
-  updateStatusEffectIndicator();
+  setDisplayedStatusEffect(activeStatusEffect);
 
   if (!fish.alive) {
     return;
@@ -407,6 +412,26 @@ function applyRandomStatusEffect() {
   setStatusEffect(STATUS_EFFECT_TYPES[randomIndex]);
 }
 
+function setDisplayedStatusEffect(effect) {
+  if (effect && STATUS_EFFECTS[effect.type]) {
+    displayedStatusEffect = {
+      type: effect.type,
+      remaining: effect.remaining ?? 0
+    };
+  } else {
+    displayedStatusEffect = null;
+  }
+  updateStatusEffectIndicator();
+}
+
+function syncMultiplayerStatusEffect(effect) {
+  if (effect && STATUS_EFFECTS[effect.type]) {
+    setDisplayedStatusEffect(effect);
+  } else {
+    setDisplayedStatusEffect(null);
+  }
+}
+
 function getCatSpeedMultiplier() {
   if (!activeStatusEffect) {
     return 1;
@@ -422,10 +447,10 @@ function getCatSpeedMultiplier() {
 
 function getFishTimeLimitForFish(fishType) {
   if (activeStatusEffect?.type === "timeIncrease") {
-    return 15;
+    return TIME_INCREASE_LIMIT;
   }
   if (activeStatusEffect?.type === "timeDecrease") {
-    return 5;
+    return TIME_DECREASE_LIMIT;
   }
   return fishType === "golden" ? GOLDEN_FISH_TIME_LIMIT : NORMAL_FISH_TIME_LIMIT;
 }
@@ -1965,9 +1990,13 @@ function createMultiplayerServerDependencies() {
     GOLDEN_FISH_POINTS,
     NORMAL_FISH_POINTS,
     GOLDEN_FISH_CHANCE,
-    getFishTimeLimitForFish,
     POWER_UP_CHANCE,
-    POWER_UP_LIFETIME
+    POWER_UP_LIFETIME,
+    STATUS_EFFECT_TYPES,
+    POWER_UP_DURATION,
+    TIME_INCREASE_LIMIT,
+    TIME_DECREASE_LIMIT,
+    GOLDEN_FISH_TIME_LIMIT
   };
 }
 
@@ -2179,6 +2208,7 @@ class MultiplayerManager {
       return;
     }
     this.state = state;
+    syncMultiplayerStatusEffect(state.statusEffect);
     if (state.phase === "playing" || state.phase === "countdown" || state.phase === "ended") {
       hideMultiplayerOverlay();
     }
