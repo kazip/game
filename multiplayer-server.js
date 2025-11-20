@@ -84,12 +84,16 @@ export class MultiplayerServer {
     const presentIds = new Set(entries.map((entry) => entry.playerId));
 
     entries.forEach((meta) => {
+      const sanitizeAppearance = this.deps?.sanitizeAppearance;
       let player = this.state.players.find((item) => item.id === meta.playerId);
       if (!player) {
         player = this.createPlayer(meta);
         this.state.players.push(player);
       }
       player.name = meta.name || player.name;
+      if (sanitizeAppearance) {
+        player.appearance = sanitizeAppearance(meta.appearance || player.appearance);
+      }
     });
 
     if (this.state.phase === "playing" || this.state.phase === "countdown") {
@@ -107,7 +111,8 @@ export class MultiplayerServer {
   }
 
   createPlayer(meta) {
-    const { WORLD_SIZE, CAT_BASE_SIZE } = this.deps;
+    const { WORLD_SIZE, CAT_BASE_SIZE, sanitizeAppearance } = this.deps;
+    const appearance = sanitizeAppearance ? sanitizeAppearance(meta.appearance) : meta.appearance;
     return {
       id: meta.playerId,
       name: meta.name || "Игрок",
@@ -120,7 +125,8 @@ export class MultiplayerServer {
       facing: 1,
       moving: false,
       walkCycle: 0,
-      stepAccumulator: 0
+      stepAccumulator: 0,
+      appearance
     };
   }
 

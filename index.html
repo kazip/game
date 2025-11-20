@@ -127,6 +127,49 @@
               </div>
               <input id="setting-music" type="checkbox" checked>
             </label>
+            <section class="settings-section" aria-label="Внешний вид котика">
+              <div class="settings-section-header">
+                <div>
+                  <h3 class="settings-section-title">Внешний вид котика</h3>
+                  <p class="settings-section-note">Выберите цвета и аксессуары, чтобы выделиться в игре и в мультиплеере.</p>
+                </div>
+              </div>
+              <div class="appearance-grid">
+                <label class="appearance-field" for="cat-color-base">
+                  <span class="appearance-label">Цвет шерсти</span>
+                  <input id="cat-color-base" type="color" value="#ffb347">
+                </label>
+                <label class="appearance-field" for="cat-color-belly">
+                  <span class="appearance-label">Цвет животика</span>
+                  <input id="cat-color-belly" type="color" value="#ffd59c">
+                </label>
+                <label class="appearance-field" for="cat-color-eyes">
+                  <span class="appearance-label">Цвет глаз</span>
+                  <input id="cat-color-eyes" type="color" value="#14365d">
+                </label>
+                <label class="appearance-field" for="cat-color-accessory">
+                  <span class="appearance-label">Цвет аксессуаров</span>
+                  <input id="cat-color-accessory" type="color" value="#3c78d8">
+                </label>
+                <label class="appearance-field" for="cat-hat">
+                  <span class="appearance-label">Шапочка</span>
+                  <select id="cat-hat">
+                    <option value="none">Без шапочки</option>
+                    <option value="beanie">Тёплая шапка</option>
+                    <option value="cap">Кепка</option>
+                    <option value="crown">Корона</option>
+                  </select>
+                </label>
+                <label class="appearance-field" for="cat-boots">
+                  <span class="appearance-label">Ботиночки</span>
+                  <select id="cat-boots">
+                    <option value="none">Без ботиночек</option>
+                    <option value="sneakers">Кроссовки</option>
+                    <option value="boots">Тёплые ботинки</option>
+                  </select>
+                </label>
+              </div>
+            </section>
           </div>
         </div>
       </div>
