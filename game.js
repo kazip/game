@@ -134,12 +134,15 @@ const resultsScoreValueEl = document.getElementById("results-score-value");
 const mainMenuOverlay = document.getElementById("main-menu-overlay");
 const menuPlayBtn = document.getElementById("menu-play");
 const menuResultsBtn = document.getElementById("menu-results");
+const menuAppearanceBtn = document.getElementById("menu-appearance");
 const menuSettingsBtn = document.getElementById("menu-settings");
 const openMenuBtn = document.getElementById("open-menu");
 const resultsOverlay = document.getElementById("results-overlay");
 const resultsBackBtn = document.getElementById("results-back");
 const settingsOverlay = document.getElementById("settings-overlay");
 const settingsBackBtn = document.getElementById("settings-back");
+const appearanceOverlay = document.getElementById("appearance-overlay");
+const appearanceBackBtn = document.getElementById("appearance-back");
 const soundToggleInput = document.getElementById("setting-sound");
 const musicToggleInput = document.getElementById("setting-music");
 const catColorBaseInput = document.getElementById("cat-color-base");
@@ -148,6 +151,8 @@ const catColorEyesInput = document.getElementById("cat-color-eyes");
 const catColorAccessoryInput = document.getElementById("cat-color-accessory");
 const catHatSelect = document.getElementById("cat-hat");
 const catBootsSelect = document.getElementById("cat-boots");
+const catPreviewCanvas = document.getElementById("cat-preview");
+const catPreviewCtx = catPreviewCanvas?.getContext("2d") ?? null;
 const modeOverlay = document.getElementById("mode-overlay");
 const startSingleBtn = document.getElementById("start-single");
 const startMultiplayerBtn = document.getElementById("start-multiplayer");
@@ -329,11 +334,42 @@ function applyAppearanceToInputs(appearance) {
   }
 }
 
+function renderCatPreview() {
+  if (!catPreviewCanvas || !catPreviewCtx) {
+    return;
+  }
+
+  const width = Math.max(Math.floor(catPreviewCanvas.clientWidth || catPreviewCanvas.width || 240), 180);
+  const height = Math.max(Math.floor(catPreviewCanvas.clientHeight || catPreviewCanvas.height || 180), 140);
+
+  if (catPreviewCanvas.width !== width) {
+    catPreviewCanvas.width = width;
+  }
+  if (catPreviewCanvas.height !== height) {
+    catPreviewCanvas.height = height;
+  }
+
+  catPreviewCtx.clearRect(0, 0, width, height);
+
+  const previewCat = {
+    x: width / 2,
+    y: height * 0.65,
+    size: Math.min(width, height) * 0.32,
+    facing: 1,
+    moving: false,
+    walkCycle: 0,
+    appearance: { ...cat.appearance }
+  };
+
+  drawCatSprite(previewCat, catPreviewCtx);
+}
+
 function updateCatAppearance(changes = {}) {
   const nextAppearance = sanitizeAppearance({ ...cat.appearance, ...changes });
   cat.appearance = nextAppearance;
   safeStoreObject(CAT_APPEARANCE_STORAGE_KEY, nextAppearance);
   applyAppearanceToInputs(nextAppearance);
+  renderCatPreview();
   if (gameMode === "multiplayer" && multiplayerManager) {
     multiplayerManager.updateAppearance(nextAppearance);
   }
@@ -341,6 +377,7 @@ function updateCatAppearance(changes = {}) {
 
 cat.appearance = loadCatAppearanceFromStorage();
 applyAppearanceToInputs(cat.appearance);
+renderCatPreview();
 
 function setScoreStatus(text = "") {
   if (scoreStatusEl) {
@@ -353,6 +390,7 @@ function showMainMenu() {
   hideMultiplayerOverlay();
   hideResultsOverlay();
   hideSettingsOverlay();
+  hideAppearanceOverlay();
   if (mainMenuOverlay) {
     mainMenuOverlay.classList.remove("hidden");
   }
@@ -369,6 +407,7 @@ function showResultsOverlay() {
   hideMainMenu();
   hideModeSelection();
   hideMultiplayerOverlay();
+  hideAppearanceOverlay();
   updateResultsSummary();
   if (resultsOverlay) {
     resultsOverlay.classList.remove("hidden");
@@ -385,6 +424,7 @@ function showSettingsOverlay() {
   hideMainMenu();
   hideModeSelection();
   hideMultiplayerOverlay();
+  hideAppearanceOverlay();
   if (settingsOverlay) {
     settingsOverlay.classList.remove("hidden");
   }
@@ -396,10 +436,28 @@ function hideSettingsOverlay() {
   }
 }
 
+function showAppearanceOverlay() {
+  hideMainMenu();
+  hideModeSelection();
+  hideMultiplayerOverlay();
+  hideSettingsOverlay();
+  if (appearanceOverlay) {
+    appearanceOverlay.classList.remove("hidden");
+  }
+  renderCatPreview();
+}
+
+function hideAppearanceOverlay() {
+  if (appearanceOverlay) {
+    appearanceOverlay.classList.add("hidden");
+  }
+}
+
 function showModeSelection() {
   hideMainMenu();
   hideResultsOverlay();
   hideSettingsOverlay();
+  hideAppearanceOverlay();
   if (modeOverlay) {
     modeOverlay.classList.remove("hidden");
   }
@@ -2071,84 +2129,89 @@ function update(delta) {
   }
 }
 
-function drawBoot(x, y, color, style, size = CAT_BASE_SIZE) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.fillStyle = color;
-  ctx.strokeStyle = "rgba(0, 0, 0, 0.12)";
-  ctx.lineWidth = 1.2;
+function drawBoot(x, y, color, style, size = CAT_BASE_SIZE, renderCtx = ctx) {
+  const ctxRef = renderCtx;
+  if (!ctxRef) return;
+  ctxRef.save();
+  ctxRef.translate(x, y);
+  ctxRef.fillStyle = color;
+  ctxRef.strokeStyle = "rgba(0, 0, 0, 0.12)";
+  ctxRef.lineWidth = 1.2;
   const width = size * 0.18;
   const height = size * 0.1;
-  ctx.beginPath();
-  ctx.roundRect(-width / 2, -height / 2, width, height, 4);
-  ctx.fill();
-  ctx.stroke();
+  ctxRef.beginPath();
+  ctxRef.roundRect(-width / 2, -height / 2, width, height, 4);
+  ctxRef.fill();
+  ctxRef.stroke();
 
   if (style === "sneakers") {
-    ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
-    ctx.fillRect(-width / 2 + 2, -2, width - 4, 3);
-    ctx.fillRect(-width / 2 + 2, 2, width - 4, 2);
+    ctxRef.fillStyle = "rgba(255, 255, 255, 0.8)";
+    ctxRef.fillRect(-width / 2 + 2, -2, width - 4, 3);
+    ctxRef.fillRect(-width / 2 + 2, 2, width - 4, 2);
   } else if (style === "boots") {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.1)";
-    ctx.fillRect(-width / 2, height / 2 - 2, width, 3);
+    ctxRef.fillStyle = "rgba(0, 0, 0, 0.1)";
+    ctxRef.fillRect(-width / 2, height / 2 - 2, width, 3);
   }
-  ctx.restore();
+  ctxRef.restore();
 }
 
-function drawHat(style, color, size) {
-  ctx.save();
-  ctx.translate(size * 0.05, -size * 0.35);
-  ctx.fillStyle = color;
-  ctx.strokeStyle = "rgba(0, 0, 0, 0.14)";
-  ctx.lineWidth = 1.2;
+function drawHat(style, color, size, renderCtx = ctx) {
+  const ctxRef = renderCtx;
+  if (!ctxRef) return;
+  ctxRef.save();
+  ctxRef.translate(size * 0.05, -size * 0.35);
+  ctxRef.fillStyle = color;
+  ctxRef.strokeStyle = "rgba(0, 0, 0, 0.14)";
+  ctxRef.lineWidth = 1.2;
 
   if (style === "beanie") {
-    ctx.beginPath();
-    ctx.arc(0, 0, size * 0.22, Math.PI, 0);
-    ctx.lineTo(size * 0.22, size * 0.04);
-    ctx.lineTo(-size * 0.22, size * 0.04);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(0, -size * 0.2, size * 0.05, 0, Math.PI * 2);
-    ctx.fillStyle = "#fff";
-    ctx.fill();
+    ctxRef.beginPath();
+    ctxRef.arc(0, 0, size * 0.22, Math.PI, 0);
+    ctxRef.lineTo(size * 0.22, size * 0.04);
+    ctxRef.lineTo(-size * 0.22, size * 0.04);
+    ctxRef.closePath();
+    ctxRef.fill();
+    ctxRef.stroke();
+    ctxRef.beginPath();
+    ctxRef.arc(0, -size * 0.2, size * 0.05, 0, Math.PI * 2);
+    ctxRef.fillStyle = "#fff";
+    ctxRef.fill();
   } else if (style === "cap") {
-    ctx.beginPath();
-    ctx.arc(0, 0, size * 0.2, Math.PI, 0);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.ellipse(size * 0.08, size * 0.03, size * 0.16, size * 0.06, 0, 0, Math.PI * 2);
-    ctx.fill();
+    ctxRef.beginPath();
+    ctxRef.arc(0, 0, size * 0.2, Math.PI, 0);
+    ctxRef.fill();
+    ctxRef.stroke();
+    ctxRef.beginPath();
+    ctxRef.ellipse(size * 0.08, size * 0.03, size * 0.16, size * 0.06, 0, 0, Math.PI * 2);
+    ctxRef.fill();
   } else if (style === "crown") {
-    ctx.beginPath();
-    ctx.moveTo(-size * 0.16, size * 0.02);
-    ctx.lineTo(-size * 0.08, -size * 0.18);
-    ctx.lineTo(0, size * 0.02);
-    ctx.lineTo(size * 0.08, -size * 0.18);
-    ctx.lineTo(size * 0.16, size * 0.02);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = "#ffe95b";
-    ctx.beginPath();
-    ctx.arc(-size * 0.08, -size * 0.18, size * 0.025, 0, Math.PI * 2);
-    ctx.arc(size * 0.08, -size * 0.18, size * 0.025, 0, Math.PI * 2);
-    ctx.fill();
+    ctxRef.beginPath();
+    ctxRef.moveTo(-size * 0.16, size * 0.02);
+    ctxRef.lineTo(-size * 0.08, -size * 0.18);
+    ctxRef.lineTo(0, size * 0.02);
+    ctxRef.lineTo(size * 0.08, -size * 0.18);
+    ctxRef.lineTo(size * 0.16, size * 0.02);
+    ctxRef.closePath();
+    ctxRef.fill();
+    ctxRef.stroke();
+    ctxRef.fillStyle = "#ffe95b";
+    ctxRef.beginPath();
+    ctxRef.arc(-size * 0.08, -size * 0.18, size * 0.025, 0, Math.PI * 2);
+    ctxRef.arc(size * 0.08, -size * 0.18, size * 0.025, 0, Math.PI * 2);
+    ctxRef.fill();
   }
 
-  ctx.restore();
+  ctxRef.restore();
 }
 
-function drawCatSprite(catState) {
-  if (!catState) {
+function drawCatSprite(catState, targetCtx = ctx) {
+  const renderCtx = targetCtx;
+  if (!catState || !renderCtx) {
     return;
   }
-  ctx.save();
-  ctx.translate(catState.x, catState.y);
-  ctx.scale(catState.facing ?? 1, 1);
+  renderCtx.save();
+  renderCtx.translate(catState.x, catState.y);
+  renderCtx.scale(catState.facing ?? 1, 1);
 
   const appearance = sanitizeAppearance(catState.appearance);
   const baseColor = appearance.baseColor;
@@ -2161,87 +2224,101 @@ function drawCatSprite(catState) {
   const bobbing = isMoving ? Math.cos(cycle) * 2 : 0;
 
   // Tail
-  ctx.save();
-  ctx.translate(-catState.size * 0.45, -catState.size * 0.1 + bobbing * 0.2);
+  renderCtx.save();
+  renderCtx.translate(-catState.size * 0.45, -catState.size * 0.1 + bobbing * 0.2);
   const tailSwing = isMoving ? Math.sin(cycle + Math.PI / 2) * 8 : 0;
-  ctx.rotate((tailSwing * Math.PI) / 180);
-  ctx.fillStyle = baseColor;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, catState.size * 0.35, catState.size * 0.12, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  renderCtx.rotate((tailSwing * Math.PI) / 180);
+  renderCtx.fillStyle = baseColor;
+  renderCtx.beginPath();
+  renderCtx.ellipse(0, 0, catState.size * 0.35, catState.size * 0.12, 0, 0, Math.PI * 2);
+  renderCtx.fill();
+  renderCtx.restore();
 
-  ctx.translate(0, bobbing);
+  renderCtx.translate(0, bobbing);
 
   // Back legs
-  ctx.fillStyle = baseColor;
+  renderCtx.fillStyle = baseColor;
   for (let i = -1; i <= 1; i += 2) {
     const swing = isMoving ? Math.sin(cycle + (i < 0 ? 0 : Math.PI)) * 4 : 0;
     const legX = i * catState.size * 0.23 + swing * 0.2;
     const legY = catState.size * 0.42;
-    ctx.beginPath();
-    ctx.ellipse(legX, legY, catState.size * 0.18, catState.size * 0.14, 0, 0, Math.PI * 2);
-    ctx.fill();
+    renderCtx.beginPath();
+    renderCtx.ellipse(legX, legY, catState.size * 0.18, catState.size * 0.14, 0, 0, Math.PI * 2);
+    renderCtx.fill();
     if (appearance.boots !== "none") {
-      drawBoot(legX, legY + catState.size * 0.07, accessoryColor, appearance.boots, catState.size);
+      drawBoot(
+        legX,
+        legY + catState.size * 0.07,
+        accessoryColor,
+        appearance.boots,
+        catState.size,
+        renderCtx
+      );
     }
   }
 
   // Body
-  ctx.fillStyle = baseColor;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, catState.size / 2, catState.size / 2.3, 0, 0, Math.PI * 2);
-  ctx.fill();
+  renderCtx.fillStyle = baseColor;
+  renderCtx.beginPath();
+  renderCtx.ellipse(0, 0, catState.size / 2, catState.size / 2.3, 0, 0, Math.PI * 2);
+  renderCtx.fill();
 
   // Belly
-  ctx.fillStyle = bellyColor;
-  ctx.beginPath();
-  ctx.ellipse(0, catState.size * 0.1, catState.size * 0.32, catState.size * 0.28, 0, 0, Math.PI * 2);
-  ctx.fill();
+  renderCtx.fillStyle = bellyColor;
+  renderCtx.beginPath();
+  renderCtx.ellipse(0, catState.size * 0.1, catState.size * 0.32, catState.size * 0.28, 0, 0, Math.PI * 2);
+  renderCtx.fill();
 
   // Front legs
-  ctx.fillStyle = baseColor;
+  renderCtx.fillStyle = baseColor;
   for (let i = -1; i <= 1; i += 2) {
     const phase = i < 0 ? Math.PI : 0;
     const swing = isMoving ? Math.sin(cycle + phase) * 4 : 0;
     const legX = i * catState.size * 0.25 - swing * 0.2;
     const legY = catState.size * 0.44;
-    ctx.beginPath();
-    ctx.ellipse(legX, legY, catState.size * 0.16, catState.size * 0.15, 0, 0, Math.PI * 2);
-    ctx.fill();
+    renderCtx.beginPath();
+    renderCtx.ellipse(legX, legY, catState.size * 0.16, catState.size * 0.15, 0, 0, Math.PI * 2);
+    renderCtx.fill();
     if (appearance.boots !== "none") {
-      drawBoot(legX, legY + catState.size * 0.08, accessoryColor, appearance.boots, catState.size);
+      drawBoot(
+        legX,
+        legY + catState.size * 0.08,
+        accessoryColor,
+        appearance.boots,
+        catState.size,
+        renderCtx
+      );
     }
   }
 
   // Head
-  ctx.save();
-  ctx.translate(catState.size * 0.26, -catState.size * 0.1);
-  ctx.fillStyle = baseColor;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, catState.size * 0.34, catState.size * 0.3, 0, 0, Math.PI * 2);
-  ctx.fill();
+  renderCtx.save();
+  renderCtx.translate(catState.size * 0.26, -catState.size * 0.1);
+  renderCtx.fillStyle = baseColor;
+  renderCtx.beginPath();
+  renderCtx.ellipse(0, 0, catState.size * 0.34, catState.size * 0.3, 0, 0, Math.PI * 2);
+  renderCtx.fill();
 
   // Ears
-  ctx.fillStyle = baseColor;
-  ctx.beginPath();
-  ctx.moveTo(-catState.size * 0.18, -catState.size * 0.22);
-  ctx.lineTo(-catState.size * 0.08, -catState.size * 0.42);
-  ctx.lineTo(0, -catState.size * 0.18);
-  ctx.closePath();
-  ctx.fill();
+  renderCtx.fillStyle = baseColor;
+  renderCtx.beginPath();
+  renderCtx.moveTo(-catState.size * 0.18, -catState.size * 0.22);
+  renderCtx.lineTo(-catState.size * 0.08, -catState.size * 0.42);
+  renderCtx.lineTo(0, -catState.size * 0.18);
+  renderCtx.closePath();
+  renderCtx.fill();
 
-  ctx.beginPath();
-  ctx.moveTo(catState.size * 0.05, -catState.size * 0.18);
-  ctx.lineTo(catState.size * 0.18, -catState.size * 0.4);
-  ctx.lineTo(catState.size * 0.2, -catState.size * 0.12);
-  ctx.closePath();
-  ctx.fill();
+  renderCtx.beginPath();
+  renderCtx.moveTo(catState.size * 0.05, -catState.size * 0.18);
+  renderCtx.lineTo(catState.size * 0.18, -catState.size * 0.4);
+  renderCtx.lineTo(catState.size * 0.2, -catState.size * 0.12);
+  renderCtx.closePath();
+  renderCtx.fill();
 
   // Eyes
-  ctx.fillStyle = eyeColor;
-  ctx.beginPath();
-  ctx.ellipse(
+  renderCtx.fillStyle = eyeColor;
+  renderCtx.beginPath();
+  renderCtx.ellipse(
     -catState.size * 0.04,
     -catState.size * 0.05,
     catState.size * 0.07,
@@ -2250,7 +2327,7 @@ function drawCatSprite(catState) {
     0,
     Math.PI * 2
   );
-  ctx.ellipse(
+  renderCtx.ellipse(
     catState.size * 0.14,
     -catState.size * 0.05,
     catState.size * 0.07,
@@ -2259,30 +2336,30 @@ function drawCatSprite(catState) {
     0,
     Math.PI * 2
   );
-  ctx.fill();
+  renderCtx.fill();
 
   // Muzzle
-  ctx.fillStyle = "#ffe5b4";
-  ctx.beginPath();
-  ctx.arc(catState.size * 0.05, catState.size * 0.05, catState.size * 0.14, 0, Math.PI * 2);
-  ctx.fill();
+  renderCtx.fillStyle = "#ffe5b4";
+  renderCtx.beginPath();
+  renderCtx.arc(catState.size * 0.05, catState.size * 0.05, catState.size * 0.14, 0, Math.PI * 2);
+  renderCtx.fill();
 
   // Nose and mouth
-  ctx.fillStyle = accessoryColor;
-  ctx.beginPath();
-  ctx.moveTo(catState.size * 0.05, catState.size * 0.0);
-  ctx.lineTo(catState.size * 0.02, catState.size * 0.05);
-  ctx.lineTo(catState.size * 0.08, catState.size * 0.05);
-  ctx.closePath();
-  ctx.fill();
+  renderCtx.fillStyle = accessoryColor;
+  renderCtx.beginPath();
+  renderCtx.moveTo(catState.size * 0.05, catState.size * 0.0);
+  renderCtx.lineTo(catState.size * 0.02, catState.size * 0.05);
+  renderCtx.lineTo(catState.size * 0.08, catState.size * 0.05);
+  renderCtx.closePath();
+  renderCtx.fill();
 
-  ctx.strokeStyle = accessoryColor;
-  ctx.lineWidth = 1.8;
-  ctx.beginPath();
-  ctx.moveTo(catState.size * 0.05, catState.size * 0.05);
-  ctx.lineTo(catState.size * 0.05, catState.size * 0.09);
-  ctx.moveTo(catState.size * 0.05, catState.size * 0.09);
-  ctx.bezierCurveTo(
+  renderCtx.strokeStyle = accessoryColor;
+  renderCtx.lineWidth = 1.8;
+  renderCtx.beginPath();
+  renderCtx.moveTo(catState.size * 0.05, catState.size * 0.05);
+  renderCtx.lineTo(catState.size * 0.05, catState.size * 0.09);
+  renderCtx.moveTo(catState.size * 0.05, catState.size * 0.09);
+  renderCtx.bezierCurveTo(
     catState.size * 0.0,
     catState.size * 0.12,
     -catState.size * 0.02,
@@ -2290,8 +2367,8 @@ function drawCatSprite(catState) {
     catState.size * 0.02,
     catState.size * 0.17
   );
-  ctx.moveTo(catState.size * 0.05, catState.size * 0.09);
-  ctx.bezierCurveTo(
+  renderCtx.moveTo(catState.size * 0.05, catState.size * 0.09);
+  renderCtx.bezierCurveTo(
     catState.size * 0.11,
     catState.size * 0.12,
     catState.size * 0.12,
@@ -2299,29 +2376,29 @@ function drawCatSprite(catState) {
     catState.size * 0.08,
     catState.size * 0.17
   );
-  ctx.stroke();
+  renderCtx.stroke();
 
   // Whiskers
-  ctx.strokeStyle = "rgba(20, 54, 93, 0.7)";
-  ctx.lineWidth = 1.4;
-  ctx.beginPath();
-  ctx.moveTo(-catState.size * 0.05, catState.size * 0.02);
-  ctx.lineTo(-catState.size * 0.26, -catState.size * 0.03);
-  ctx.moveTo(-catState.size * 0.04, catState.size * 0.07);
-  ctx.lineTo(-catState.size * 0.24, catState.size * 0.12);
-  ctx.moveTo(catState.size * 0.12, catState.size * 0.02);
-  ctx.lineTo(catState.size * 0.32, -catState.size * 0.03);
-  ctx.moveTo(catState.size * 0.13, catState.size * 0.07);
-  ctx.lineTo(catState.size * 0.3, catState.size * 0.12);
-  ctx.stroke();
+  renderCtx.strokeStyle = "rgba(20, 54, 93, 0.7)";
+  renderCtx.lineWidth = 1.4;
+  renderCtx.beginPath();
+  renderCtx.moveTo(-catState.size * 0.05, catState.size * 0.02);
+  renderCtx.lineTo(-catState.size * 0.26, -catState.size * 0.03);
+  renderCtx.moveTo(-catState.size * 0.04, catState.size * 0.07);
+  renderCtx.lineTo(-catState.size * 0.24, catState.size * 0.12);
+  renderCtx.moveTo(catState.size * 0.12, catState.size * 0.02);
+  renderCtx.lineTo(catState.size * 0.32, -catState.size * 0.03);
+  renderCtx.moveTo(catState.size * 0.13, catState.size * 0.07);
+  renderCtx.lineTo(catState.size * 0.3, catState.size * 0.12);
+  renderCtx.stroke();
 
   if (appearance.hat && appearance.hat !== "none") {
-    drawHat(appearance.hat, accessoryColor, catState.size);
+    drawHat(appearance.hat, accessoryColor, catState.size, renderCtx);
   }
 
-  ctx.restore();
+  renderCtx.restore();
 
-  ctx.restore();
+  renderCtx.restore();
 }
 
 function drawCat() {
@@ -3242,6 +3319,12 @@ if (menuResultsBtn) {
   });
 }
 
+if (menuAppearanceBtn) {
+  menuAppearanceBtn.addEventListener("click", () => {
+    showAppearanceOverlay();
+  });
+}
+
 if (menuSettingsBtn) {
   menuSettingsBtn.addEventListener("click", () => {
     showSettingsOverlay();
@@ -3258,6 +3341,13 @@ if (resultsBackBtn) {
 if (settingsBackBtn) {
   settingsBackBtn.addEventListener("click", () => {
     hideSettingsOverlay();
+    showMainMenu();
+  });
+}
+
+if (appearanceBackBtn) {
+  appearanceBackBtn.addEventListener("click", () => {
+    hideAppearanceOverlay();
     showMainMenu();
   });
 }

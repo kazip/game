@@ -50,6 +50,7 @@
           <div class="modal-actions menu-actions">
             <button id="menu-play" type="button">Играть</button>
             <button id="menu-results" type="button">Результаты</button>
+            <button id="menu-appearance" type="button">Внешний вид</button>
             <button id="menu-settings" type="button">Настройки</button>
           </div>
         </div>
@@ -128,13 +129,30 @@
               </div>
               <input id="setting-music" type="checkbox" checked>
             </label>
-            <section class="settings-section" aria-label="Внешний вид котика">
-              <div class="settings-section-header">
-                <div>
-                  <h3 class="settings-section-title">Внешний вид котика</h3>
-                  <p class="settings-section-note">Выберите цвета и аксессуары, чтобы выделиться в игре и в мультиплеере.</p>
-                </div>
+          </div>
+        </div>
+      </div>
+      <div
+        id="appearance-overlay"
+        class="modal-overlay hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="appearance-title"
+      >
+        <div class="modal-card settings-card">
+          <div class="modal-header">
+            <h2 id="appearance-title">Внешний вид котика</h2>
+            <button id="appearance-back" type="button" class="secondary">Назад</button>
+          </div>
+          <p class="settings-section-note">Настройте цвета и аксессуары, чтобы ваш котик был уникальным.</p>
+          <div class="appearance-layout">
+            <div class="appearance-preview-card">
+              <div class="appearance-preview-header">
+                <span class="appearance-label">Предпросмотр</span>
               </div>
+              <canvas id="cat-preview" width="240" height="180" aria-label="Предпросмотр котика"></canvas>
+            </div>
+            <div class="appearance-controls">
               <div class="appearance-grid">
                 <label class="appearance-field" for="cat-color-base">
                   <span class="appearance-label">Цвет шерсти</span>
@@ -170,7 +188,7 @@
                   </select>
                 </label>
               </div>
-            </section>
+            </div>
           </div>
         </div>
       </div>
