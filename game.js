@@ -2884,7 +2884,18 @@ class MultiplayerManager {
       });
     }
     if (multiplayerStatusEl) {
-      const message = this.state?.message || "Подождите немного, идёт подключение";
+      let message = this.state?.message || "Подождите немного, идёт подключение";
+      if (this.state?.phase === "ended" && players.length > 0) {
+        const sorted = [...players].sort((a, b) => b.score - a.score);
+        const winner = this.state.winnerId
+          ? sorted.find((player) => player.id === this.state.winnerId)
+          : sorted[0];
+        const winnerText = winner
+          ? `Победитель: ${winner.name} (${winner.score})`
+          : "Победитель не определён";
+        const scoresText = sorted.map((player) => `${player.name}: ${player.score}`).join(", ");
+        message = `${message}. ${winnerText}. Итоги — ${scoresText}`;
+      }
       multiplayerStatusEl.textContent = message;
     }
   }
