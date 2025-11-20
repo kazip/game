@@ -231,12 +231,14 @@ canvas {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 12px;
   width: min(900px, 100%);
+  max-width: calc(100vw - 24px);
   align-items: start;
 }
 
 .multiplayer-lobby-shell .modal-card {
   width: 100%;
   margin: 0;
+  min-width: 0;
 }
 
 .modal-card h2 {
@@ -451,6 +453,7 @@ canvas {
   display: grid;
   gap: 10px;
   align-self: stretch;
+  min-width: 0;
 }
 
 .multiplayer-chat.hidden {
@@ -462,11 +465,13 @@ canvas {
   justify-content: space-between;
   align-items: baseline;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .multiplayer-chat-room {
   font-size: 0.9rem;
   color: rgba(20, 54, 93, 0.8);
+  word-break: break-word;
 }
 
 .multiplayer-chat-messages {
@@ -479,6 +484,8 @@ canvas {
   min-height: 140px;
   overflow-y: auto;
   text-align: left;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .multiplayer-chat-messages li {
@@ -661,6 +668,14 @@ canvas {
 
   .multiplayer-chat-messages {
     max-height: 220px;
+  }
+
+  .multiplayer-chat-form {
+    grid-template-columns: 1fr;
+  }
+
+  .multiplayer-chat-form button {
+    width: 100%;
   }
 }
 
