@@ -2009,6 +2009,8 @@ function drawFishSprite(fishState) {
   if (!fishState || !fishState.alive) return;
   ctx.save();
   ctx.translate(fishState.x, fishState.y);
+  const facing = Math.sign(fishState.direction || 1) || 1;
+  ctx.scale(facing, 1);
   const bodyColor = fishState.type === "golden" ? "#ffd700" : "#5cc8ff";
   const finColor = fishState.type === "golden" ? "#ffae00" : "#5cc8ff";
   ctx.fillStyle = bodyColor;
