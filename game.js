@@ -88,6 +88,7 @@ const STATUS_EFFECT_TYPES = Object.keys(STATUS_EFFECTS);
 
 let activeStatusEffect = null;
 let displayedStatusEffect = null;
+let lastResultReason = null;
 
 const keys = new Set();
 const NORMAL_FISH_TIME_LIMIT = 10;
@@ -114,6 +115,8 @@ const submitScoreForm = document.getElementById("submit-score");
 const playerNameInput = document.getElementById("player-name");
 const saveScoreButton = document.getElementById("save-score");
 const scoreStatusEl = document.getElementById("score-status");
+const resultsSummaryEl = document.getElementById("results-summary");
+const resultsScoreValueEl = document.getElementById("results-score-value");
 const mainMenuOverlay = document.getElementById("main-menu-overlay");
 const menuPlayBtn = document.getElementById("menu-play");
 const menuResultsBtn = document.getElementById("menu-results");
@@ -260,6 +263,7 @@ function showResultsOverlay() {
   hideMainMenu();
   hideModeSelection();
   hideMultiplayerOverlay();
+  updateResultsSummary();
   if (resultsOverlay) {
     resultsOverlay.classList.remove("hidden");
   }
@@ -539,6 +543,26 @@ function updateScoreFormControls() {
       !scoreboardState.hasSavedCurrentScore &&
       !scoreboardState.isSaving;
     saveScoreButton.disabled = !shouldEnable;
+  }
+}
+
+function updateResultsSummary(reasonOverride = null) {
+  if (!resultsSummaryEl) {
+    return;
+  }
+
+  const isRoundFinished = Boolean(gameOver);
+  const reasonText = reasonOverride ?? lastResultReason;
+  if (!isRoundFinished) {
+    resultsSummaryEl.textContent =
+      "Сыграйте раунд, чтобы увидеть ваши результаты.";
+  } else {
+    const reasonPrefix = reasonText ? `${reasonText} ` : "";
+    resultsSummaryEl.textContent = `${reasonPrefix}Итоговый счёт: ${score}.`;
+  }
+
+  if (resultsScoreValueEl) {
+    resultsScoreValueEl.textContent = isRoundFinished ? score : 0;
   }
 }
 
@@ -1769,6 +1793,7 @@ function resetGame() {
   gameOver = false;
   scoreboardState.hasSavedCurrentScore = false;
   scoreboardState.isSaving = false;
+  lastResultReason = null;
   messageEl.textContent = "";
   restartBtn.disabled = true;
   cat.x = WORLD_SIZE / 2;
@@ -1790,6 +1815,7 @@ function resetGame() {
   if (supabaseClient) {
     setScoreStatus(DEFAULT_SCORE_STATUS);
   }
+  updateResultsSummary();
   updateScoreFormControls();
   requestAnimationFrame(loop);
 }
@@ -1800,10 +1826,16 @@ function endGame(reason) {
   restartBtn.disabled = false;
   messageEl.textContent = reason + ` Результат: ${score}.`;
   powerUp.active = false;
+  lastResultReason = reason;
   clearStatusEffect();
   updateBoardSize();
   soundManager.stopMusic(0.8);
+  updateResultsSummary(reason);
   updateScoreFormControls();
+  showResultsOverlay();
+  if (supabaseClient && playerNameInput) {
+    playerNameInput.focus();
+  }
   if (supabaseClient && !scoreboardState.hasSavedCurrentScore) {
     setScoreStatus("Введите имя и сохраните результат.");
   }

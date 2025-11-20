@@ -279,6 +279,24 @@ canvas {
   width: min(560px, 100%);
 }
 
+.results-summary {
+  background: linear-gradient(135deg, #f5f7ff 0%, #eef3ff 100%);
+  border: 1px solid #dce5ff;
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.results-summary p {
+  margin: 0;
+}
+
+.results-score {
+  font-weight: 700;
+  color: #1d3557;
+}
+
 .modal-card.main-menu-card {
   text-align: center;
 }
