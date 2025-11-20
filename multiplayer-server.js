@@ -880,6 +880,7 @@ export class MultiplayerServer {
   }
 
   buildStatePayload() {
+    const sanitizeAppearance = this.deps?.sanitizeAppearance;
     return {
       roomName: this.state.roomName,
       phase: this.state.phase,
@@ -906,7 +907,10 @@ export class MultiplayerServer {
         size: player.size,
         facing: player.facing,
         moving: player.moving,
-        walkCycle: player.walkCycle
+        walkCycle: player.walkCycle,
+        appearance: sanitizeAppearance
+          ? sanitizeAppearance(player.appearance)
+          : player.appearance
       })),
       serverTime: Date.now()
     };
