@@ -313,6 +313,11 @@ function startSingleMode() {
   }, 0);
 }
 
+function openModeSelection() {
+  showModeSelection();
+  gameMode = "menu";
+}
+
 function updateScoreFormControls() {
   if (!submitScoreForm) {
     return;
@@ -2209,8 +2214,13 @@ class MultiplayerManager {
     }
     this.state = state;
     syncMultiplayerStatusEffect(state.statusEffect);
-    if (state.phase === "playing" || state.phase === "countdown" || state.phase === "ended") {
+    if (state.phase === "playing" || state.phase === "countdown") {
       hideMultiplayerOverlay();
+      hideRestartButton();
+    } else if (state.phase === "ended") {
+      showMultiplayerOverlay();
+      showMultiplayerLobby();
+      showRestartButton();
     }
     this.updateHud();
     this.updateLobbyUI();
@@ -2453,9 +2463,24 @@ window.addEventListener("keyup", (event) => {
 });
 
 restartBtn.addEventListener("click", () => {
-  if (gameMode !== "single" || !gameOver) return;
   ensureAudioActive();
-  resetGame();
+  if (gameMode === "single" && gameOver) {
+    openModeSelection();
+    return;
+  }
+
+  if (
+    gameMode === "multiplayer" &&
+    multiplayerManager &&
+    multiplayerManager.state?.phase === "ended"
+  ) {
+    showMultiplayerOverlay();
+    showMultiplayerLobby();
+    multiplayerManager.updateLobbyUI();
+    return;
+  }
+
+  openModeSelection();
 });
 
 if (startSingleBtn) {
