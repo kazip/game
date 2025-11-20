@@ -114,6 +114,17 @@ const submitScoreForm = document.getElementById("submit-score");
 const playerNameInput = document.getElementById("player-name");
 const saveScoreButton = document.getElementById("save-score");
 const scoreStatusEl = document.getElementById("score-status");
+const mainMenuOverlay = document.getElementById("main-menu-overlay");
+const menuPlayBtn = document.getElementById("menu-play");
+const menuResultsBtn = document.getElementById("menu-results");
+const menuSettingsBtn = document.getElementById("menu-settings");
+const openMenuBtn = document.getElementById("open-menu");
+const resultsOverlay = document.getElementById("results-overlay");
+const resultsBackBtn = document.getElementById("results-back");
+const settingsOverlay = document.getElementById("settings-overlay");
+const settingsBackBtn = document.getElementById("settings-back");
+const soundToggleInput = document.getElementById("setting-sound");
+const musicToggleInput = document.getElementById("setting-music");
 const modeOverlay = document.getElementById("mode-overlay");
 const startSingleBtn = document.getElementById("start-single");
 const startMultiplayerBtn = document.getElementById("start-multiplayer");
@@ -174,6 +185,8 @@ const supabaseClient = supabaseConfigured
 let multiplayerLobby = null;
 
 const PLAYER_NAME_STORAGE_KEY = "cat-game:player-name";
+const SOUND_ENABLED_STORAGE_KEY = "cat-game:sound-enabled";
+const MUSIC_ENABLED_STORAGE_KEY = "cat-game:music-enabled";
 const DEFAULT_SCORE_STATUS =
   "Сыграйте раунд и сохраните результат в таблицу лидеров.";
 
@@ -200,13 +213,83 @@ function safeStoreName(name) {
   }
 }
 
+function safeGetStoredBoolean(key, defaultValue) {
+  try {
+    const rawValue = window.localStorage.getItem(key);
+    if (rawValue === null) {
+      return defaultValue;
+    }
+    return rawValue === "true";
+  } catch (error) {
+    return defaultValue;
+  }
+}
+
+function safeStoreBoolean(key, value) {
+  try {
+    window.localStorage.setItem(key, value ? "true" : "false");
+  } catch (error) {
+    // Ignore storage errors silently.
+  }
+}
+
 function setScoreStatus(text = "") {
   if (scoreStatusEl) {
     scoreStatusEl.textContent = text;
   }
 }
 
+function showMainMenu() {
+  hideModeSelection();
+  hideMultiplayerOverlay();
+  hideResultsOverlay();
+  hideSettingsOverlay();
+  if (mainMenuOverlay) {
+    mainMenuOverlay.classList.remove("hidden");
+  }
+  gameMode = "menu";
+}
+
+function hideMainMenu() {
+  if (mainMenuOverlay) {
+    mainMenuOverlay.classList.add("hidden");
+  }
+}
+
+function showResultsOverlay() {
+  hideMainMenu();
+  hideModeSelection();
+  hideMultiplayerOverlay();
+  if (resultsOverlay) {
+    resultsOverlay.classList.remove("hidden");
+  }
+}
+
+function hideResultsOverlay() {
+  if (resultsOverlay) {
+    resultsOverlay.classList.add("hidden");
+  }
+}
+
+function showSettingsOverlay() {
+  hideMainMenu();
+  hideModeSelection();
+  hideMultiplayerOverlay();
+  if (settingsOverlay) {
+    settingsOverlay.classList.remove("hidden");
+  }
+}
+
+function hideSettingsOverlay() {
+  if (settingsOverlay) {
+    settingsOverlay.classList.add("hidden");
+  }
+}
+
 function showModeSelection() {
+  hideMainMenu();
+  hideResultsOverlay();
+  hideSettingsOverlay();
   if (modeOverlay) {
     modeOverlay.classList.remove("hidden");
   }
@@ -394,7 +477,7 @@ async function leaveMultiplayerRoom({ backToMenu = false } = {}) {
   hideMultiplayerChat();
   showRestartButton();
   if (backToMenu) {
-    showModeSelection();
+    showMainMenu();
   }
   setDisplayedStatusEffect(null);
   messageEl.textContent = "";
@@ -746,6 +829,8 @@ class SoundManager {
     this.musicGain = null;
     this.sfxGain = null;
     this.enabled = false;
+    this.musicEnabled = true;
+    this.sfxEnabled = true;
     this.padOscillators = [];
     this.musicLoopId = null;
     this.lastStepTime = 0;
@@ -774,15 +859,17 @@ class SoundManager {
     this.musicGain.connect(this.masterGain);
 
     this.sfxGain = this.context.createGain();
-    this.sfxGain.gain.value = 1;
+    this.sfxGain.gain.value = this.sfxEnabled ? 1 : 0;
     this.sfxGain.connect(this.masterGain);
 
     this.enabled = true;
-    this.startMusic();
+    if (this.musicEnabled) {
+      this.startMusic();
+    }
   }
 
   startMusic() {
-    if (!this.enabled) {
+    if (!this.enabled || !this.musicEnabled) {
       return;
     }
 
@@ -845,6 +932,25 @@ class SoundManager {
       }
     });
     this.padOscillators = [];
+  }
+
+  setSfxEnabled(enabled) {
+    this.sfxEnabled = Boolean(enabled);
+    if (this.sfxGain) {
+      this.sfxGain.gain.value = this.sfxEnabled ? 1 : 0;
+    }
+  }
+
+  setMusicEnabled(enabled) {
+    this.musicEnabled = Boolean(enabled);
+    if (!this.enabled) {
+      return;
+    }
+    if (this.musicEnabled) {
+      this.startMusic();
+    } else {
+      this.stopMusic(0.3);
+    }
   }
 
   createPadLayer(startTime) {
@@ -1081,7 +1187,7 @@ class SoundManager {
   }
 
   playCatch() {
-    if (!this.enabled) {
+    if (!this.enabled || !this.sfxEnabled || !this.sfxGain) {
       return;
     }
     const ctx = this.context;
@@ -1122,7 +1228,7 @@ class SoundManager {
   }
 
   playStep() {
-    if (!this.enabled || !this.sfxGain) {
+    if (!this.enabled || !this.sfxEnabled || !this.sfxGain) {
       return;
     }
 
@@ -1151,6 +1257,10 @@ class SoundManager {
 }
 
 const soundManager = new SoundManager();
+const initialSoundEnabled = safeGetStoredBoolean(SOUND_ENABLED_STORAGE_KEY, true);
+const initialMusicEnabled = safeGetStoredBoolean(MUSIC_ENABLED_STORAGE_KEY, true);
+soundManager.setSfxEnabled(initialSoundEnabled);
+soundManager.setMusicEnabled(initialMusicEnabled);
 
 function ensureAudioActive() {
   soundManager.init();
@@ -2871,6 +2981,68 @@ window.addEventListener("keyup", (event) => {
   }
 });
 
+if (openMenuBtn) {
+  openMenuBtn.addEventListener("click", () => {
+    showMainMenu();
+  });
+}
+
+if (menuPlayBtn) {
+  menuPlayBtn.addEventListener("click", () => {
+    showModeSelection();
+  });
+}
+
+if (menuResultsBtn) {
+  menuResultsBtn.addEventListener("click", () => {
+    showResultsOverlay();
+  });
+}
+
+if (menuSettingsBtn) {
+  menuSettingsBtn.addEventListener("click", () => {
+    showSettingsOverlay();
+  });
+}
+
+if (resultsBackBtn) {
+  resultsBackBtn.addEventListener("click", () => {
+    hideResultsOverlay();
+    showMainMenu();
+  });
+}
+
+if (settingsBackBtn) {
+  settingsBackBtn.addEventListener("click", () => {
+    hideSettingsOverlay();
+    showMainMenu();
+  });
+}
+
+if (soundToggleInput) {
+  soundToggleInput.checked = initialSoundEnabled;
+  soundToggleInput.addEventListener("change", () => {
+    const enabled = Boolean(soundToggleInput.checked);
+    soundManager.setSfxEnabled(enabled);
+    safeStoreBoolean(SOUND_ENABLED_STORAGE_KEY, enabled);
+    if (enabled) {
+      ensureAudioActive();
+    }
+  });
+}
+
+if (musicToggleInput) {
+  musicToggleInput.checked = initialMusicEnabled;
+  musicToggleInput.addEventListener("change", () => {
+    const enabled = Boolean(musicToggleInput.checked);
+    soundManager.setMusicEnabled(enabled);
+    safeStoreBoolean(MUSIC_ENABLED_STORAGE_KEY, enabled);
+    if (enabled) {
+      ensureAudioActive();
+    }
+  });
+}
+
 restartBtn.addEventListener("click", () => {
   ensureAudioActive();
   if (gameMode === "single" && gameOver) {
@@ -2939,7 +3111,7 @@ if (multiplayerCancelBtn) {
   multiplayerCancelBtn.addEventListener("click", async () => {
     await leaveMultiplayerRoom({ backToMenu: true });
     hideMultiplayerOverlay();
-    showModeSelection();
+    showMainMenu();
   });
 }
 
@@ -3187,7 +3359,7 @@ if (coarsePointerQuery) {
 // Запуск игры при загрузке страницы
 resetJoystick();
 hideRestartButton();
-showModeSelection();
+showMainMenu();
 updateBoardSize();
 scoreEl.textContent = "0";
 timerEl.textContent = NORMAL_FISH_TIME_LIMIT.toFixed(1);
