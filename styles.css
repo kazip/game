@@ -378,6 +378,13 @@ canvas {
   width: min(560px, 100%);
 }
 
+.modal-card.settings-card,
+.modal-card.results-card,
+.modal-card.main-menu-card {
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
 .results-summary {
   background: linear-gradient(135deg, #f5f7ff 0%, #eef3ff 100%);
   border: 1px solid #dce5ff;
@@ -398,6 +405,30 @@ canvas {
 
 .modal-card.main-menu-card {
   text-align: center;
+}
+
+@media (max-width: 640px) {
+  .modal-overlay {
+    align-items: flex-start;
+  }
+
+  .modal-card.settings-card {
+    padding: 16px;
+    gap: 12px;
+  }
+
+  #cat-preview {
+    max-height: 170px;
+  }
+
+  .appearance-grid {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px;
+  }
+
+  .appearance-field {
+    padding: 8px;
+  }
 }
 
 .modal-header {
