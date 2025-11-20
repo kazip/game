@@ -32,17 +32,100 @@
   </script>
 </head>
 <body>
-  <div class="game-container">
-    <h1>Котик ловит рыбку</h1>
-    <div id="mode-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="mode-title">
-      <div class="modal-card">
-        <h2 id="mode-title">Выберите режим игры</h2>
-        <div class="modal-actions">
-          <button id="start-single" type="button">Соло</button>
-          <button id="start-multiplayer" type="button">Мультиплеер</button>
+    <div class="game-container">
+      <h1>Котик ловит рыбку</h1>
+      <div class="top-bar" aria-label="Меню">
+        <button id="open-menu" type="button" class="secondary">Меню</button>
+      </div>
+      <div
+        id="main-menu-overlay"
+        class="modal-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="main-menu-title"
+      >
+        <div class="modal-card main-menu-card">
+          <h2 id="main-menu-title">Меню</h2>
+          <div class="modal-actions menu-actions">
+            <button id="menu-play" type="button">Играть</button>
+            <button id="menu-results" type="button">Результаты</button>
+            <button id="menu-settings" type="button">Настройки</button>
+          </div>
         </div>
       </div>
-    </div>
+      <div id="mode-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="mode-title">
+        <div class="modal-card">
+          <h2 id="mode-title">Выберите режим игры</h2>
+          <div class="modal-actions">
+            <button id="start-single" type="button">Соло</button>
+            <button id="start-multiplayer" type="button">Мультиплеер</button>
+          </div>
+        </div>
+      </div>
+      <div
+        id="results-overlay"
+        class="modal-overlay hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="results-title"
+      >
+        <div class="modal-card results-card">
+          <div class="modal-header">
+            <h2 id="results-title">Результаты</h2>
+            <button id="results-back" type="button" class="secondary">Назад</button>
+          </div>
+          <section class="scoreboard" aria-labelledby="scoreboard-title">
+            <h2 id="scoreboard-title">Таблица лидеров</h2>
+            <ol id="leaderboard" class="scoreboard-list"></ol>
+            <form id="submit-score" class="scoreboard-form">
+              <label class="scoreboard-label" for="player-name">Ваше имя</label>
+              <div class="scoreboard-controls">
+                <input
+                  id="player-name"
+                  name="player-name"
+                  type="text"
+                  maxlength="32"
+                  autocomplete="name"
+                  placeholder="Котолюбитель"
+                  required
+                >
+                <button id="save-score" type="submit">Сохранить очки</button>
+              </div>
+            </form>
+            <p id="score-status" class="scoreboard-status" role="status" aria-live="polite"></p>
+          </section>
+        </div>
+      </div>
+      <div
+        id="settings-overlay"
+        class="modal-overlay hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+      >
+        <div class="modal-card settings-card">
+          <div class="modal-header">
+            <h2 id="settings-title">Настройки</h2>
+            <button id="settings-back" type="button" class="secondary">Назад</button>
+          </div>
+          <div class="settings-list">
+            <label class="toggle-option" for="setting-sound">
+              <div class="toggle-main">
+                <span class="toggle-title">Звук</span>
+                <span class="toggle-note">Вкл/выкл звуки игры</span>
+              </div>
+              <input id="setting-sound" type="checkbox" checked>
+            </label>
+            <label class="toggle-option" for="setting-music">
+              <div class="toggle-main">
+                <span class="toggle-title">Музыка</span>
+                <span class="toggle-note">Вкл/выкл музыку на фоне</span>
+              </div>
+              <input id="setting-music" type="checkbox" checked>
+            </label>
+          </div>
+        </div>
+      </div>
     <div id="multiplayer-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
       <div class="modal-card" id="multiplayer-prejoin">
         <h2>Мультиплеер</h2>
@@ -135,26 +218,6 @@
     </div>
     <div id="message" role="status"></div>
     <button id="restart" type="button">Играть снова</button>
-    <section class="scoreboard" aria-labelledby="scoreboard-title">
-      <h2 id="scoreboard-title">Таблица лидеров</h2>
-      <ol id="leaderboard" class="scoreboard-list"></ol>
-      <form id="submit-score" class="scoreboard-form">
-        <label class="scoreboard-label" for="player-name">Ваше имя</label>
-        <div class="scoreboard-controls">
-          <input
-            id="player-name"
-            name="player-name"
-            type="text"
-            maxlength="32"
-            autocomplete="name"
-            placeholder="Котолюбитель"
-            required
-          >
-          <button id="save-score" type="submit">Сохранить очки</button>
-        </div>
-      </form>
-      <p id="score-status" class="scoreboard-status" role="status" aria-live="polite"></p>
-    </section>
   </div>
 </body>
 </html>
