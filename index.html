@@ -46,16 +46,28 @@
     <div id="multiplayer-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
       <div class="modal-card" id="multiplayer-prejoin">
         <h2>Мультиплеер</h2>
-        <form id="multiplayer-join-form" class="multiplayer-form">
-          <label class="scoreboard-label" for="multiplayer-name">Ваше имя</label>
-          <input id="multiplayer-name" name="multiplayer-name" type="text" maxlength="32" autocomplete="name" placeholder="Котолюбитель" required>
-          <label class="scoreboard-label" for="multiplayer-room">Название комнаты</label>
-          <input id="multiplayer-room" name="multiplayer-room" type="text" maxlength="32" placeholder="Например, kotiki" required>
-          <div class="modal-actions">
-            <button type="submit">Войти</button>
-            <button id="multiplayer-cancel" type="button">Назад</button>
+        <div class="multiplayer-browser">
+          <div class="multiplayer-room-list-header">
+            <h3>Доступные комнаты</h3>
+            <button id="multiplayer-room-refresh" type="button" class="secondary">Обновить</button>
           </div>
-          <p id="multiplayer-error" class="multiplayer-error" role="alert"></p>
+          <ul id="multiplayer-room-list" class="multiplayer-room-list" aria-live="polite"></ul>
+          <p id="multiplayer-room-empty" class="multiplayer-room-empty">Пока нет открытых комнат. Создайте свою!</p>
+          <p class="multiplayer-room-note">Подключаться можно только к комнатам, где раунд ещё не начался.</p>
+        </div>
+        <form id="multiplayer-join-form" class="multiplayer-form">
+          <fieldset class="multiplayer-fieldset">
+            <legend>Создать комнату</legend>
+            <label class="scoreboard-label" for="multiplayer-name">Ваше имя</label>
+            <input id="multiplayer-name" name="multiplayer-name" type="text" maxlength="32" autocomplete="name" placeholder="Котолюбитель" required>
+            <label class="scoreboard-label" for="multiplayer-room">Название комнаты</label>
+            <input id="multiplayer-room" name="multiplayer-room" type="text" maxlength="32" placeholder="Например, kotiki" required>
+            <div class="modal-actions">
+              <button type="submit">Создать</button>
+              <button id="multiplayer-cancel" type="button">Назад</button>
+            </div>
+            <p id="multiplayer-error" class="multiplayer-error" role="alert"></p>
+          </fieldset>
         </form>
       </div>
       <div class="modal-card hidden" id="multiplayer-lobby" role="document">
@@ -75,6 +87,25 @@
       </div>
       <ul id="multiplayer-hud-players" class="multiplayer-hud-players"></ul>
       <div id="multiplayer-game-message" class="multiplayer-game-message"></div>
+    </div>
+    <div id="multiplayer-chat" class="multiplayer-chat hidden" aria-live="polite">
+      <div class="multiplayer-chat-header">
+        <h3>Чат комнаты</h3>
+        <span id="multiplayer-chat-room" class="multiplayer-chat-room"></span>
+      </div>
+      <ul id="multiplayer-chat-messages" class="multiplayer-chat-messages"></ul>
+      <form id="multiplayer-chat-form" class="multiplayer-chat-form">
+        <label class="visually-hidden" for="multiplayer-chat-input">Сообщение</label>
+        <input
+          id="multiplayer-chat-input"
+          name="multiplayer-chat-input"
+          type="text"
+          maxlength="240"
+          placeholder="Написать сообщение"
+          autocomplete="off"
+        >
+        <button type="submit">Отправить</button>
+      </form>
     </div>
     <div class="hud">
       <div>Очки: <span id="score">0</span></div>
