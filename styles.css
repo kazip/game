@@ -381,7 +381,7 @@ canvas {
 .modal-card.settings-card,
 .modal-card.results-card,
 .modal-card.main-menu-card {
-  max-height: 90vh;
+  /*max-height: 90vh;*/
   overflow-y: auto;
 }
 
