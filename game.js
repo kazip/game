@@ -2977,6 +2977,7 @@ class MultiplayerManager {
       return;
     }
     this.state = state;
+    this.syncReadyFromState(state);
     syncMultiplayerStatusEffect(state.statusEffect);
     if (state.phase === "playing" || state.phase === "countdown") {
       hideMultiplayerOverlay();
@@ -2991,6 +2992,21 @@ class MultiplayerManager {
     this.updateHud();
     this.updateLobbyUI();
     this.ensureRender();
+  }
+
+  syncReadyFromState(state) {
+    if (!state || !Array.isArray(state.players)) {
+      return;
+    }
+    const self = state.players.find((player) => player.id === this.playerId);
+    if (!self || self.ready === this.ready) {
+      return;
+    }
+    this.ready = self.ready;
+    if (this.presenceMeta) {
+      this.presenceMeta = { ...this.presenceMeta, ready: this.ready };
+    }
+    this.updateReadyButton();
   }
 
   ensureRender() {
