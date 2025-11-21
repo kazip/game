@@ -644,6 +644,7 @@ async function leaveMultiplayerRoom({ backToMenu = false } = {}) {
   multiplayerHud?.classList.add("hidden");
   hideMultiplayerChat();
   showRestartButton();
+  soundManager.stopMusic(0.6);
   if (backToMenu) {
     showMainMenu();
   }
@@ -2761,6 +2762,7 @@ class MultiplayerManager {
     this.renderFrameBound = (timestamp) => this.renderFrame(timestamp);
     this.chatMessages = [];
     this.lobby = lobby;
+    this.lastLocalStepAccumulator = 0;
   }
 
   sendPresenceUpdate(meta) {
@@ -2973,10 +2975,12 @@ class MultiplayerManager {
   }
 
   handleServerState(state) {
+    const previousState = this.state;
     if (!state) {
       return;
     }
     this.state = state;
+    this.handleStateAudio(previousState, state);
     this.syncReadyFromState(state);
     syncMultiplayerStatusEffect(state.statusEffect);
     if (state.phase === "playing" || state.phase === "countdown") {
@@ -2992,6 +2996,49 @@ class MultiplayerManager {
     this.updateHud();
     this.updateLobbyUI();
     this.ensureRender();
+  }
+
+  handleStateAudio(previousState, nextState) {
+    const wasActivePhase =
+      previousState?.phase === "playing" || previousState?.phase === "countdown";
+    const isActivePhase =
+      nextState?.phase === "playing" || nextState?.phase === "countdown";
+
+    if (isActivePhase && !wasActivePhase) {
+      ensureAudioActive();
+      soundManager.startMusic();
+    } else if (!isActivePhase && wasActivePhase) {
+      soundManager.stopMusic(0.6);
+    }
+
+    const selfId = this.playerId;
+    const previousPlayer = previousState?.players?.find((player) => player.id === selfId);
+    const currentPlayer = nextState?.players?.find((player) => player.id === selfId);
+
+    if (currentPlayer) {
+      const previousScore = previousPlayer?.score ?? 0;
+      if (currentPlayer.score > previousScore) {
+        soundManager.playCatch();
+      }
+
+      const prevStep = previousPlayer?.stepAccumulator ?? this.lastLocalStepAccumulator ?? 0;
+      const nextStep = currentPlayer.stepAccumulator ?? 0;
+      const stepWrapped =
+        currentPlayer.moving &&
+        (nextStep < prevStep - 0.25 || (prevStep > 0.25 && nextStep < prevStep));
+      if (stepWrapped) {
+        soundManager.playStep();
+      }
+      this.lastLocalStepAccumulator = nextStep;
+    } else {
+      this.lastLocalStepAccumulator = 0;
+    }
+
+    const prevEffectType = previousState?.statusEffect?.type;
+    const nextEffectType = nextState?.statusEffect?.type;
+    if (nextEffectType && nextEffectType !== prevEffectType) {
+      soundManager.playCatch();
+    }
   }
 
   syncReadyFromState(state) {
