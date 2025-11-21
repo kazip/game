@@ -368,6 +368,7 @@ canvas {
   gap: 16px;
   box-shadow: 0 16px 40px rgba(20, 54, 93, 0.35);
   text-align: left;
+  margin-top: 30px;
 }
 
 .modal-card.settings-card {
@@ -405,7 +406,6 @@ canvas {
 
 .modal-card.main-menu-card {
   text-align: center;
-  margin-top: 30px;
 }
 
 @media (max-width: 640px) {
