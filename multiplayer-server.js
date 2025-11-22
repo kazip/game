@@ -1,3 +1,5 @@
+import { encodeStateToBase64 } from "./multiplayer-binary.js";
+
 const MULTIPLAYER_TICK_INTERVAL = 1 / 60;
 const MULTIPLAYER_BROADCAST_INTERVAL = 1 / 15;
 const MULTIPLAYER_COUNTDOWN_DURATION = 3;
@@ -876,12 +878,12 @@ export class MultiplayerServer {
       return;
     }
     this.state.serverTime = Date.now();
-    this.manager.broadcastState(this.buildStatePayload());
+    this.manager.broadcastState(this.buildStatePayload(), this.state);
   }
 
   buildStatePayload() {
     const sanitizeAppearance = this.deps?.sanitizeAppearance;
-    return {
+    return encodeStateToBase64({
       roomName: this.state.roomName,
       phase: this.state.phase,
       countdown: this.state.countdown,
@@ -908,11 +910,12 @@ export class MultiplayerServer {
         facing: player.facing,
         moving: player.moving,
         walkCycle: player.walkCycle,
+        stepAccumulator: player.stepAccumulator,
         appearance: sanitizeAppearance
           ? sanitizeAppearance(player.appearance)
           : player.appearance
       })),
       serverTime: Date.now()
-    };
+    }, sanitizeAppearance);
   }
 }
