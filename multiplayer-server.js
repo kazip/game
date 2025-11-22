@@ -52,6 +52,9 @@ export class MultiplayerServer {
     this.intervalId = null;
     this.lastUpdate = performance.now();
     this.broadcastAccumulator = 0;
+    this.needsImmediateBroadcast = false;
+    this.forceBroadcast = false;
+    this.tickIndex = 0;
   }
 
   destroy() {
@@ -95,6 +98,7 @@ export class MultiplayerServer {
       player.name = meta.name || player.name;
       if (sanitizeAppearance) {
         player.appearance = sanitizeAppearance(meta.appearance || player.appearance);
+        player.appearanceJson = JSON.stringify(player.appearance || {}).slice(0, 300);
       }
     });
 
@@ -109,7 +113,8 @@ export class MultiplayerServer {
     }
 
     this.updateLobbyMessage();
-    this.broadcastState(true);
+    this.needsImmediateBroadcast = true;
+    this.forceBroadcast = true;
   }
 
   createPlayer(meta) {
@@ -128,7 +133,8 @@ export class MultiplayerServer {
       moving: false,
       walkCycle: 0,
       stepAccumulator: 0,
-      appearance
+      appearance,
+      appearanceJson: JSON.stringify(appearance || {}).slice(0, 300)
     };
   }
 
@@ -176,7 +182,8 @@ export class MultiplayerServer {
       this.state.players.forEach((p) => {
         p.ready = p.id === playerId ? false : p.ready;
       });
-      this.broadcastState(true);
+      this.needsImmediateBroadcast = true;
+      this.forceBroadcast = true;
       return;
     }
 
@@ -190,7 +197,8 @@ export class MultiplayerServer {
     if (readyCount === this.state.players.length && this.state.players.length > 0) {
       this.startCountdown();
     } else {
-      this.broadcastState(true);
+      this.needsImmediateBroadcast = true;
+      this.forceBroadcast = true;
     }
   }
 
@@ -201,7 +209,9 @@ export class MultiplayerServer {
       return;
     }
     player.appearance = sanitizeAppearance(appearance || player.appearance);
-    this.broadcastState(true);
+    player.appearanceJson = JSON.stringify(player.appearance || {}).slice(0, 300);
+    this.needsImmediateBroadcast = true;
+    this.forceBroadcast = true;
   }
 
   handlePlayerInput(playerId, vector) {
@@ -211,14 +221,24 @@ export class MultiplayerServer {
     }
     const cappedX = clamp(vector.x, -1.5, 1.5);
     const cappedY = clamp(vector.y, -1.5, 1.5);
-    this.inputs[playerId] = { x: cappedX, y: cappedY };
+    const existing = this.inputs[playerId];
+    if (existing && existing.x === cappedX && existing.y === cappedY) {
+      return;
+    }
+    if (existing) {
+      existing.x = cappedX;
+      existing.y = cappedY;
+    } else {
+      this.inputs[playerId] = { x: cappedX, y: cappedY };
+    }
   }
 
   startCountdown() {
     this.state.phase = "countdown";
     this.state.countdown = MULTIPLAYER_COUNTDOWN_DURATION;
     this.state.message = "Игра скоро начнётся";
-    this.broadcastState(true);
+    this.needsImmediateBroadcast = true;
+    this.forceBroadcast = true;
   }
 
   startRound() {
@@ -233,7 +253,7 @@ export class MultiplayerServer {
     this.state.message = "Игра началась";
     this.state.winnerId = null;
     this.inputs = {};
-    this.broadcastState(true);
+    this.needsImmediateBroadcast = true;
   }
 
   assignSpawnPositions() {
@@ -650,6 +670,7 @@ export class MultiplayerServer {
   }
 
   tick() {
+    this.tickIndex += 1;
     const now = performance.now();
     const delta = (now - this.lastUpdate) / 1000;
     this.lastUpdate = now;
@@ -661,9 +682,14 @@ export class MultiplayerServer {
     }
 
     this.broadcastAccumulator += delta;
-    if (this.broadcastAccumulator >= MULTIPLAYER_BROADCAST_INTERVAL) {
+    const shouldBroadcast =
+      this.needsImmediateBroadcast || this.broadcastAccumulator >= MULTIPLAYER_BROADCAST_INTERVAL;
+    if (shouldBroadcast) {
       this.broadcastAccumulator = 0;
-      this.broadcastState();
+      const force = this.forceBroadcast;
+      this.needsImmediateBroadcast = false;
+      this.forceBroadcast = false;
+      this.broadcastState(force);
     }
   }
 
@@ -772,7 +798,7 @@ export class MultiplayerServer {
     }
 
     if (stateChanged) {
-      this.broadcastState(true);
+      this.needsImmediateBroadcast = true;
     }
   }
 
@@ -870,52 +896,20 @@ export class MultiplayerServer {
     this.state.countdown = 0;
     this.state.fish.alive = false;
     this.state.statusEffect = null;
-    this.broadcastState(true);
+    this.needsImmediateBroadcast = true;
   }
 
   broadcastState(force = false) {
     if (!force && this.state.phase === "lobby") {
       return;
     }
-    this.state.serverTime = Date.now();
+    const now = Date.now();
+    this.state.serverTime = now;
+    this.state.tickIndex = this.tickIndex;
     this.manager.broadcastState(this.buildStatePayload(), this.state);
   }
 
   buildStatePayload() {
-    const sanitizeAppearance = this.deps?.sanitizeAppearance;
-    return encodeStateToBase64({
-      roomName: this.state.roomName,
-      phase: this.state.phase,
-      countdown: this.state.countdown,
-      remaining: this.state.remaining,
-      message: this.state.message,
-      winnerId: this.state.winnerId,
-      goldenChainActive: this.state.goldenChainActive,
-      statusEffect: this.state.statusEffect
-        ? { type: this.state.statusEffect.type, remaining: this.state.statusEffect.remaining }
-        : null,
-      fish: { ...this.state.fish },
-      powerUp: { ...this.state.powerUp },
-      walls: this.state.walls.map((wall) => ({ ...wall })),
-      mines: this.state.mines.map((mine) => ({ ...mine })),
-      players: this.state.players.map((player) => ({
-        id: player.id,
-        name: player.name,
-        score: player.score,
-        ready: player.ready,
-        alive: player.alive,
-        x: player.x,
-        y: player.y,
-        size: player.size,
-        facing: player.facing,
-        moving: player.moving,
-        walkCycle: player.walkCycle,
-        stepAccumulator: player.stepAccumulator,
-        appearance: sanitizeAppearance
-          ? sanitizeAppearance(player.appearance)
-          : player.appearance
-      })),
-      serverTime: Date.now()
-    }, sanitizeAppearance);
+    return encodeStateToBase64(this.state);
   }
 }

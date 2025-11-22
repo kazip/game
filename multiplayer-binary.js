@@ -191,8 +191,9 @@ function encodePlayers(players = [], writer) {
     writer.writeBool(Boolean(player.moving));
     writer.writeFloat32(player.walkCycle || 0);
     writer.writeFloat32(player.stepAccumulator || 0);
-    const appearance = player.appearance ? JSON.stringify(player.appearance).slice(0, 300) : "";
-    writer.writeString(appearance);
+    const appearance =
+      player.appearanceJson || (player.appearance ? JSON.stringify(player.appearance).slice(0, 300) : "");
+    writer.writeString(appearance || "");
   });
 }
 
@@ -228,9 +229,10 @@ function decodePlayers(reader) {
   return players;
 }
 
-export function encodeStateToBase64(state, sanitizeAppearance) {
+export function encodeStateToBase64(state) {
   const writer = new BinaryWriter();
-  writer.writeUint32(Math.floor(state.serverTime || Date.now()));
+  writer.writeUint32(Math.floor(state.serverTime || 0));
+  writer.writeUint32(state.tickIndex >>> 0 || 0);
   writer.writeString(state.roomName || "");
   writer.writeUint8(PHASE_CODES[state.phase] ?? 0);
   writer.writeFloat32(state.countdown || 0);
@@ -261,11 +263,7 @@ export function encodeStateToBase64(state, sanitizeAppearance) {
   encodeWalls(state.walls, writer);
   encodeMines(state.mines, writer);
 
-  const players = (state.players || []).map((player) => ({
-    ...player,
-    appearance: sanitizeAppearance ? sanitizeAppearance(player.appearance) : player.appearance
-  }));
-  encodePlayers(players, writer);
+  encodePlayers(state.players || [], writer);
   return toBase64(writer.toUint8Array());
 }
 
@@ -277,6 +275,7 @@ export function decodeStateFromBase64(payload) {
   const buffer = fromBase64(base64);
   const reader = new BinaryReader(buffer);
   const serverTime = reader.readUint32();
+  const tickIndex = reader.readUint32();
   const roomName = reader.readString();
   const phaseCode = reader.readUint8();
   const countdown = reader.readFloat32();
@@ -313,7 +312,6 @@ export function decodeStateFromBase64(payload) {
   const players = decodePlayers(reader);
 
   return {
-    roomName: "",
     phase: Object.keys(PHASE_CODES).find((key) => PHASE_CODES[key] === phaseCode) || "lobby",
     countdown,
     remaining,
@@ -327,6 +325,7 @@ export function decodeStateFromBase64(payload) {
     mines,
     players,
     serverTime,
+    tickIndex,
     roomName
   };
 }
