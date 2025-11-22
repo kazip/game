@@ -1,6 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./supabase-config.js";
 import { MultiplayerServer } from "./multiplayer-server.js";
+import {
+  decodeInputFromBase64,
+  decodeStateFromBase64,
+  encodeInputToBase64
+} from "./multiplayer-binary.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -2763,6 +2768,7 @@ class MultiplayerManager {
     this.chatMessages = [];
     this.lobby = lobby;
     this.lastLocalStepAccumulator = 0;
+    this.pendingLocalStateTimeout = null;
   }
 
   sendPresenceUpdate(meta) {
@@ -2825,6 +2831,10 @@ class MultiplayerManager {
       this.server.destroy();
       this.server = null;
     }
+    if (this.pendingLocalStateTimeout) {
+      clearTimeout(this.pendingLocalStateTimeout);
+      this.pendingLocalStateTimeout = null;
+    }
     if (this.channel) {
       try {
         await this.channel.untrack();
@@ -2855,7 +2865,10 @@ class MultiplayerManager {
       return;
     }
     this.channel.on("broadcast", { event: "server-state" }, ({ payload }) => {
-      this.handleServerState(payload);
+      const decoded = decodeStateFromBase64(payload);
+      if (decoded) {
+        this.handleServerState(decoded);
+      }
     });
     this.channel.on("broadcast", { event: "player-ready" }, ({ payload }) => {
       if (this.isHost && this.server) {
@@ -2863,8 +2876,9 @@ class MultiplayerManager {
       }
     });
     this.channel.on("broadcast", { event: "player-input" }, ({ payload }) => {
-      if (this.isHost && this.server) {
-        this.server.handlePlayerInput(payload.playerId, payload.vector);
+      const decoded = decodeInputFromBase64(payload);
+      if (decoded && this.isHost && this.server) {
+        this.server.handlePlayerInput(decoded.playerId, decoded.vector);
       }
     });
     this.channel.on("broadcast", { event: "player-appearance" }, ({ payload }) => {
@@ -2959,18 +2973,28 @@ class MultiplayerManager {
     }
   }
 
-  broadcastState(state) {
-    if (!this.channel) {
+  broadcastState(encodedState, decodedState) {
+    if (!this.channel || !encodedState) {
       return;
     }
     this.channel.send({
       type: "broadcast",
       event: "server-state",
-      payload: state
+      payload: { binary: encodedState }
     });
-    this.handleServerState(state);
-    if (this.lobby && this.isHost) {
-      this.lobby.publishRoomState(this.roomName, state);
+    if (this.lobby && this.isHost && decodedState) {
+      this.lobby.publishRoomState(this.roomName, decodedState);
+    }
+    if (this.isHost) {
+      if (this.pendingLocalStateTimeout) {
+        clearTimeout(this.pendingLocalStateTimeout);
+      }
+      this.pendingLocalStateTimeout = setTimeout(() => {
+        const fallback = decodeStateFromBase64(encodedState);
+        if (fallback) {
+          this.handleServerState(fallback);
+        }
+      }, 24);
     }
   }
 
@@ -2978,6 +3002,10 @@ class MultiplayerManager {
     const previousState = this.state;
     if (!state) {
       return;
+    }
+    if (this.pendingLocalStateTimeout) {
+      clearTimeout(this.pendingLocalStateTimeout);
+      this.pendingLocalStateTimeout = null;
     }
     this.state = state;
     this.handleStateAudio(previousState, state);
@@ -3108,9 +3136,6 @@ class MultiplayerManager {
       event: "player-ready",
       payload: { playerId: this.playerId, ready: this.ready }
     });
-    if (this.isHost && this.server) {
-      this.server.handlePlayerReady(this.playerId, this.ready);
-    }
   }
 
   updateAppearance(appearance) {
@@ -3128,10 +3153,6 @@ class MultiplayerManager {
         event: "player-appearance",
         payload: { playerId: this.playerId, appearance: sanitized }
       });
-      if (this.isHost && this.server) {
-        this.server.handlePlayerAppearance(this.playerId, sanitized);
-        this.server.syncPresence(this.channel.presenceState());
-      }
     }
   }
 
@@ -3186,14 +3207,12 @@ class MultiplayerManager {
     if (!this.channel) {
       return;
     }
+    const payload = encodeInputToBase64(this.playerId, vector);
     this.channel.send({
       type: "broadcast",
       event: "player-input",
-      payload: { playerId: this.playerId, vector }
+      payload: { binary: payload }
     });
-    if (this.isHost && this.server) {
-      this.server.handlePlayerInput(this.playerId, vector);
-    }
   }
 
   updateInputFromControls() {
