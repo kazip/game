@@ -116,11 +116,22 @@ const GOLDEN_FISH_CHANCE = 0.05;
 const GOLDEN_FISH_TIME_LIMIT = 5;
 const GOLDEN_FISH_POINTS = 5;
 
+const TIMER_MODES = {
+  PER_FISH: "per-fish",
+  SHARED: "shared"
+};
+
+const SHARED_TIMER_START = 20;
+const SHARED_TIMER_NORMAL_BONUS = 2;
+const SHARED_TIMER_GOLDEN_BONUS = 5;
+const SHARED_TIMER_MINE_PENALTY = 5;
+
 let score = 0;
 let remaining = NORMAL_FISH_TIME_LIMIT;
 let lastTimestamp = 0;
 let gameOver = false;
 let goldenChainActive = false;
+let singleTimerMode = TIMER_MODES.PER_FISH;
 const messageEl = document.getElementById("message");
 const restartBtn = document.getElementById("restart");
 const scoreEl = document.getElementById("score");
@@ -160,6 +171,7 @@ const catPreviewCanvas = document.getElementById("cat-preview");
 const catPreviewCtx = catPreviewCanvas?.getContext("2d") ?? null;
 const modeOverlay = document.getElementById("mode-overlay");
 const startSingleBtn = document.getElementById("start-single");
+const startSingleSharedBtn = document.getElementById("start-single-shared");
 const startMultiplayerBtn = document.getElementById("start-multiplayer");
 const multiplayerOverlay = document.getElementById("multiplayer-overlay");
 const multiplayerJoinForm = document.getElementById("multiplayer-join-form");
@@ -655,7 +667,7 @@ async function leaveMultiplayerRoom({ backToMenu = false } = {}) {
   }
   setDisplayedStatusEffect(null);
   messageEl.textContent = "";
-  timerEl.textContent = NORMAL_FISH_TIME_LIMIT.toFixed(1);
+  updateTimerDisplay(NORMAL_FISH_TIME_LIMIT);
   scoreEl.textContent = "0";
   gameMode = backToMenu ? "menu" : gameMode;
 }
@@ -680,10 +692,11 @@ async function joinMultiplayerRoom(roomName, playerName) {
   updateBoardSize();
 }
 
-function startSingleMode() {
+function startSingleMode(timerModeOverride = TIMER_MODES.PER_FISH) {
   leaveMultiplayerRoom().catch(() => {});
   hideMultiplayerOverlay();
   showRestartButton();
+  singleTimerMode = timerModeOverride;
   gameMode = "single";
   gameOver = true;
   hideModeSelection();
@@ -798,6 +811,19 @@ function setStatusEffect(effectType) {
   setDisplayedStatusEffect(activeStatusEffect);
 
   if (!fish.alive) {
+    return;
+  }
+
+  if (isSharedTimerMode()) {
+    if (effectType === "timeIncrease") {
+      remaining += TIME_INCREASE_LIMIT;
+    } else if (effectType === "timeDecrease") {
+      remaining = Math.max(remaining - TIME_DECREASE_LIMIT, 0);
+    }
+    updateTimerDisplay();
+    if (remaining <= 0) {
+      endGame("Время вышло!");
+    }
     return;
   }
 
@@ -1904,6 +1930,16 @@ function updateBoardSize() {
   updateJoystickThumbPosition();
 }
 
+function isSharedTimerMode() {
+  return gameMode === "single" && singleTimerMode === TIMER_MODES.SHARED;
+}
+
+function updateTimerDisplay(value = remaining) {
+  if (timerEl) {
+    timerEl.textContent = Math.max(value, 0).toFixed(1);
+  }
+}
+
 function spawnFish() {
   const margin = 30;
   const shouldSpawnGolden = goldenChainActive || Math.random() < GOLDEN_FISH_CHANCE;
@@ -1951,7 +1987,10 @@ function spawnFish() {
   }
 
   fish.alive = true;
-  remaining = getFishTimeLimitForFish(fish.type);
+  if (!isSharedTimerMode()) {
+    remaining = getFishTimeLimitForFish(fish.type);
+    updateTimerDisplay();
+  }
   spawnMines();
   maybeSpawnPowerUp();
 }
@@ -1977,6 +2016,8 @@ function resetGame() {
   powerUp.remaining = 0;
   clearStatusEffect();
   clearMines();
+  remaining = isSharedTimerMode() ? SHARED_TIMER_START : NORMAL_FISH_TIME_LIMIT;
+  updateTimerDisplay();
   spawnFish();
   if (soundManager.enabled) {
     soundManager.startMusic();
@@ -2091,16 +2132,31 @@ function update(delta) {
       score += isGoldenFish ? GOLDEN_FISH_POINTS : NORMAL_FISH_POINTS;
       scoreEl.textContent = score;
       goldenChainActive = isGoldenFish;
+      if (isSharedTimerMode()) {
+        remaining += isGoldenFish ? SHARED_TIMER_GOLDEN_BONUS : SHARED_TIMER_NORMAL_BONUS;
+        updateTimerDisplay();
+      }
       spawnFish();
       soundManager.playCatch();
     }
   }
 
-  for (const mine of mines) {
+  for (let i = mines.length - 1; i >= 0; i -= 1) {
+    const mine = mines[i];
     const distanceToMine = Math.hypot(cat.x - mine.x, cat.y - mine.y);
     if (distanceToMine < (cat.size + mine.size) / 2) {
-      endGame("Котик подорвался на мине!");
-      return;
+      if (isSharedTimerMode()) {
+        mines.splice(i, 1);
+        remaining = Math.max(remaining - SHARED_TIMER_MINE_PENALTY, 0);
+        updateTimerDisplay();
+        if (remaining <= 0) {
+          endGame("Время вышло!");
+          return;
+        }
+      } else {
+        endGame("Котик подорвался на мине!");
+        return;
+      }
     }
   }
 
@@ -2109,7 +2165,11 @@ function update(delta) {
     if (activeStatusEffect.remaining <= 0) {
       const endedEffect = activeStatusEffect.type;
       clearStatusEffect();
-      if (fish.alive && (endedEffect === "timeIncrease" || endedEffect === "timeDecrease")) {
+      if (
+        !isSharedTimerMode() &&
+        fish.alive &&
+        (endedEffect === "timeIncrease" || endedEffect === "timeDecrease")
+      ) {
         const baseLimit = getFishTimeLimitForFish(fish.type);
         if (endedEffect === "timeIncrease") {
           remaining = Math.min(remaining, baseLimit);
@@ -2122,8 +2182,12 @@ function update(delta) {
 
   remaining -= delta;
   const displayTime = Math.max(remaining, 0);
-  timerEl.textContent = displayTime.toFixed(1);
+  updateTimerDisplay(displayTime);
   if (remaining <= 0) {
+    if (isSharedTimerMode()) {
+      endGame("Время вышло!");
+      return;
+    }
     const missedFishType = fish.type;
     if (missedFishType === "golden") {
       fish.alive = false;
@@ -3532,6 +3596,12 @@ if (startSingleBtn) {
   });
 }
 
+if (startSingleSharedBtn) {
+  startSingleSharedBtn.addEventListener("click", () => {
+    startSingleMode(TIMER_MODES.SHARED);
+  });
+}
+
 if (startMultiplayerBtn) {
   startMultiplayerBtn.addEventListener("click", () => {
     hideModeSelection();
@@ -3824,4 +3894,4 @@ hideRestartButton();
 showMainMenu();
 updateBoardSize();
 scoreEl.textContent = "0";
-timerEl.textContent = NORMAL_FISH_TIME_LIMIT.toFixed(1);
+updateTimerDisplay(NORMAL_FISH_TIME_LIMIT);
