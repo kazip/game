@@ -3125,10 +3125,11 @@ class MultiplayerManager {
     prepareCanvasForFrame();
     if (this.state) {
       const players = this.getInterpolatedPlayers(progress);
+      const fish = this.getInterpolatedFish(progress);
       drawWallsCollection(this.state.walls || []);
       drawMinesCollection(this.state.mines || []);
       drawPowerUpSprite(this.state.powerUp);
-      drawFishSprite(this.state.fish);
+      drawFishSprite(fish);
       players.forEach((player) => {
         drawCatSprite(player);
       });
@@ -3173,6 +3174,34 @@ class MultiplayerManager {
         stepAccumulator
       };
     });
+  }
+
+  getInterpolatedFish(progress) {
+    if (!this.state?.fish) {
+      return null;
+    }
+    const currentFish = this.state.fish;
+    const previousFish = this.previousRenderState?.fish;
+    if (!previousFish || !previousFish.alive || !currentFish.alive) {
+      return currentFish;
+    }
+
+    const clampedProgress = clamp(progress ?? 1, 0, 1);
+    const interpolateValue = (from, to) => from + (to - from) * clampedProgress;
+
+    return {
+      ...currentFish,
+      x: interpolateValue(previousFish.x ?? currentFish.x, currentFish.x ?? previousFish.x),
+      y: interpolateValue(previousFish.y ?? currentFish.y, currentFish.y ?? previousFish.y),
+      size: interpolateValue(
+        previousFish.size ?? currentFish.size,
+        currentFish.size ?? previousFish.size
+      ),
+      direction:
+        clampedProgress < 0.5
+          ? previousFish.direction ?? currentFish.direction
+          : currentFish.direction ?? previousFish.direction
+    };
   }
 
   toggleReady() {
