@@ -22,6 +22,7 @@ const (
 	catSpeed          = 180.0
 	catSize           = 36.0
 	fishSize          = 28.0
+	fishSwimSpeed     = 36.0
 	gridSize          = 10
 	gridCellSize      = worldSize / gridSize
 	wallThickness     = gridCellSize * 0.6
@@ -1319,9 +1320,13 @@ func (r *room) step() {
 		r.updateStatusEffectLocked()
 		r.updatePowerUpLocked()
 		r.updatePlayersLocked()
+		if r.countAlivePlayersLocked() == 0 {
+			r.endRoundLocked("Раунд завершён: все коты погибли")
+			return
+		}
 		r.updateFishLocked()
 		if r.state.Remaining <= 0 {
-			r.endRoundLocked()
+			r.endRoundLocked("Раунд завершён")
 		}
 	default:
 		r.updateLobbyMessageLocked()
@@ -1344,9 +1349,13 @@ func (r *room) beginRoundLocked() {
 	}
 }
 
-func (r *room) endRoundLocked() {
+func (r *room) endRoundLocked(reason string) {
 	r.state.Phase = "ended"
-	r.state.Message = "Раунд завершён"
+	if reason != "" {
+		r.state.Message = reason
+	} else {
+		r.state.Message = "Раунд завершён"
+	}
 	r.state.Fish.Alive = false
 	r.state.Countdown = 0
 	r.state.WinnerID = r.bestPlayerIDLocked()
@@ -1406,12 +1415,36 @@ func (r *room) updatePlayersLocked() {
 	}
 }
 
+func (r *room) countAlivePlayersLocked() int {
+	count := 0
+	for _, p := range r.players {
+		if p.Alive {
+			count++
+		}
+	}
+	return count
+}
+
 func (r *room) updateFishLocked() {
 	if !r.state.Fish.Alive {
 		r.spawnFishLocked()
 		return
 	}
+	swimStep := float64(r.state.Fish.Direction) * fishSwimSpeed * tickRate.Seconds()
+	nextX := r.state.Fish.X + swimStep
+	if r.fishCollidesAt(nextX) {
+		r.state.Fish.Direction *= -1
+		nextX = r.state.Fish.X + float64(r.state.Fish.Direction)*fishSwimSpeed*tickRate.Seconds()
+		if r.fishCollidesAt(nextX) {
+			nextX = r.state.Fish.X
+		}
+	}
+	r.state.Fish.X = clampFloat(nextX, r.state.Fish.Size/2, worldSize-r.state.Fish.Size/2)
+
 	for _, p := range r.players {
+		if !p.Alive {
+			continue
+		}
 		dist := math.Hypot(p.X-r.state.Fish.X, p.Y-r.state.Fish.Y)
 		if dist <= fishCatchDistance {
 			p.Score += 1
@@ -1925,6 +1958,27 @@ func circleIntersectsRect(cx, cy, radius float64, rect wall) bool {
 func circleIntersectsAnyWall(cx, cy, radius float64, walls []wall) bool {
 	for _, w := range walls {
 		if circleIntersectsRect(cx, cy, radius, w) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *room) fishCollidesAt(x float64) bool {
+	radius := r.state.Fish.Size / 2
+	if x-radius < 0 || x+radius > worldSize {
+		return true
+	}
+	if circleIntersectsAnyWall(x, r.state.Fish.Y, radius, r.state.Walls) {
+		return true
+	}
+	if r.state.PowerUp.Active {
+		if math.Hypot(x-r.state.PowerUp.X, r.state.Fish.Y-r.state.PowerUp.Y) < radius+r.state.PowerUp.Size/2 {
+			return true
+		}
+	}
+	for _, m := range r.state.Mines {
+		if math.Hypot(x-m.X, r.state.Fish.Y-m.Y) < radius+m.Size/2 {
 			return true
 		}
 	}
