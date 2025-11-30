@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ const (
 	countdownDuration = 3 * time.Second
 	roundDuration     = 60 * time.Second
 	fishCatchDistance = 34.0
+	dataFileName      = "data.json"
 )
 
 type vector struct {
@@ -120,11 +122,13 @@ type server struct {
 }
 
 func newServer() *server {
-	return &server{
+	srv := &server{
 		cats:     make(map[string]catProfile),
 		rooms:    make(map[string]*room),
 		upgrader: websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
 	}
+	srv.loadFromDisk()
+	return srv
 }
 
 func (s *server) getOrCreateRoom(name string) *room {
@@ -166,6 +170,7 @@ func (s *server) saveCat(profile catProfile) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cats[profile.PlayerID] = profile
+	s.persistLocked()
 }
 
 func (s *server) getCat(id string) (catProfile, bool) {
@@ -189,6 +194,53 @@ func (s *server) addScore(entry scoreEntry) {
 	})
 	if len(s.scores) > 50 {
 		s.scores = s.scores[:50]
+	}
+	s.persistLocked()
+}
+
+func (s *server) loadFromDisk() {
+	data, err := os.ReadFile(dataFileName)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("failed to read data file: %v", err)
+		}
+		return
+	}
+
+	var payload struct {
+		Cats   map[string]catProfile `json:"cats"`
+		Scores []scoreEntry          `json:"scores"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		log.Printf("failed to decode data file: %v", err)
+		return
+	}
+
+	if payload.Cats != nil {
+		s.cats = payload.Cats
+	}
+	if payload.Scores != nil {
+		s.scores = payload.Scores
+	}
+}
+
+func (s *server) persistLocked() {
+	payload := struct {
+		Cats   map[string]catProfile `json:"cats"`
+		Scores []scoreEntry          `json:"scores"`
+	}{
+		Cats:   s.cats,
+		Scores: s.scores,
+	}
+
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		log.Printf("failed to encode data file: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(dataFileName, data, 0o644); err != nil {
+		log.Printf("failed to write data file: %v", err)
 	}
 }
 
