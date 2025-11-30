@@ -482,12 +482,12 @@ function hideMainMenu() {
   }
 }
 
-function showResultsOverlay() {
+function showResultsOverlay({ reasonText = null, scoreValue = null, forceFinished = null } = {}) {
   hideMainMenu();
   hideModeSelection();
   hideMultiplayerOverlay();
   hideAppearanceOverlay();
-  updateResultsSummary();
+  updateResultsSummary(reasonText, scoreValue, forceFinished);
   if (resultsOverlay) {
     resultsOverlay.classList.remove("hidden");
   }
@@ -790,23 +790,25 @@ function updateScoreFormControls() {
   }
 }
 
-function updateResultsSummary(reasonOverride = null) {
+function updateResultsSummary(reasonOverride = null, scoreOverride = null, forceRoundFinished = null) {
   if (!resultsSummaryEl) {
     return;
   }
 
-  const isRoundFinished = Boolean(gameOver);
+  const isRoundFinished =
+    forceRoundFinished != null ? Boolean(forceRoundFinished) : Boolean(gameOver);
   const reasonText = reasonOverride ?? lastResultReason;
+  const scoreValue = scoreOverride ?? score;
   if (!isRoundFinished) {
     resultsSummaryEl.textContent =
       "Сыграйте раунд, чтобы увидеть ваши результаты.";
   } else {
     const reasonPrefix = reasonText ? `${reasonText} ` : "";
-    resultsSummaryEl.textContent = `${reasonPrefix}Итоговый счёт: ${score}.`;
+    resultsSummaryEl.textContent = `${reasonPrefix}Итоговый счёт: ${scoreValue}.`;
   }
 
   if (resultsScoreValueEl) {
-    resultsScoreValueEl.textContent = isRoundFinished ? score : 0;
+    resultsScoreValueEl.textContent = isRoundFinished ? scoreValue : 0;
   }
 }
 
@@ -3113,6 +3115,7 @@ class MultiplayerManager {
     this.previousRenderState = previousState || nextState;
     this.smoothingStartTime = now;
     this.state = nextState;
+    const previousPhase = previousState?.phase;
     this.handleStateAudio(previousState, nextState);
     syncMultiplayerStatusEffect(nextState.statusEffect);
     if (nextState.phase === "playing" || nextState.phase === "countdown") {
@@ -3124,6 +3127,9 @@ class MultiplayerManager {
       showMultiplayerLobby();
       showMultiplayerChat(this.roomName);
       showRestartButton();
+      if (previousPhase !== "ended") {
+        this.showRoundResults(nextState);
+      }
     }
     this.ready = Boolean(nextState.players?.find((player) => player.id === this.playerId)?.ready);
     this.updateReadyButton();
@@ -3173,6 +3179,30 @@ class MultiplayerManager {
     if (nextEffectType && nextEffectType !== prevEffectType) {
       soundManager.playCatch();
     }
+  }
+
+  showRoundResults(state) {
+    const players = [...(state?.players || [])];
+    const sorted = players.sort((a, b) => b.score - a.score);
+    const winner = state?.winnerId
+      ? sorted.find((player) => player.id === state.winnerId)
+      : sorted[0];
+
+    const summaryParts = [];
+    if (state?.message) {
+      summaryParts.push(state.message);
+    }
+    if (winner) {
+      summaryParts.push(`Победитель: ${winner.name} (${winner.score})`);
+    }
+    if (sorted.length > 0) {
+      const scoresText = sorted.map((player) => `${player.name}: ${player.score}`).join(", ");
+      summaryParts.push(`Итоги — ${scoresText}`);
+    }
+
+    const summary = summaryParts.filter(Boolean).join(". ") || "Раунд завершён";
+    const localScore = players.find((player) => player.id === this.playerId)?.score ?? 0;
+    showResultsOverlay({ reasonText: summary, scoreValue: localScore, forceFinished: true });
   }
 
   ensureRender() {
