@@ -148,7 +148,42 @@ type wsMessage struct {
 	Message    *chatMessage  `json:"message,omitempty"`
 	Appearance catAppearance `json:"appearance,omitempty"`
 	State      *gameState    `json:"state,omitempty"`
+	Patch      *statePatch   `json:"patch,omitempty"`
+	Full       bool          `json:"full,omitempty"`
 	Error      string        `json:"error,omitempty"`
+}
+
+type playerPatch struct {
+	ID             string        `json:"id"`
+	Name           *string       `json:"name,omitempty"`
+	Ready          *bool         `json:"ready,omitempty"`
+	Alive          *bool         `json:"alive,omitempty"`
+	X              *float64      `json:"x,omitempty"`
+	Y              *float64      `json:"y,omitempty"`
+	Size           *float64      `json:"size,omitempty"`
+	Facing         *int          `json:"facing,omitempty"`
+	Moving         *bool         `json:"moving,omitempty"`
+	WalkCycle      *float64      `json:"walkCycle,omitempty"`
+	StepAccum      *float64      `json:"stepAccumulator,omitempty"`
+	Score          *int          `json:"score,omitempty"`
+	Appearance     catAppearance `json:"appearance,omitempty"`
+	AppearanceJSON *string       `json:"appearanceJson,omitempty"`
+}
+
+type statePatch struct {
+	Phase          *string       `json:"phase,omitempty"`
+	Countdown      *float64      `json:"countdown,omitempty"`
+	Remaining      *float64      `json:"remaining,omitempty"`
+	Message        *string       `json:"message,omitempty"`
+	WinnerID       *string       `json:"winnerId,omitempty"`
+	ServerTime     *int64        `json:"serverTime,omitempty"`
+	Status         *statusEffect `json:"statusEffect,omitempty"`
+	Fish           *fishState    `json:"fish,omitempty"`
+	PowerUp        *powerUpState `json:"powerUp,omitempty"`
+	Walls          []wall        `json:"walls,omitempty"`
+	Mines          []mine        `json:"mines,omitempty"`
+	Players        []playerPatch `json:"players,omitempty"`
+	RemovedPlayers []string      `json:"removedPlayers,omitempty"`
 }
 
 type chatMessage struct {
@@ -158,15 +193,225 @@ type chatMessage struct {
 	At       int64  `json:"at"`
 }
 
+func floatChanged(a, b float64) bool {
+	return math.Abs(a-b) > 0.0001
+}
+
+func stringPtr(v string) *string { return &v }
+
+func boolPtr(v bool) *bool { return &v }
+
+func floatPtr(v float64) *float64 { return &v }
+
+func intPtr(v int) *int { return &v }
+
+func statusEqual(a, b *statusEffect) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Type == b.Type && !floatChanged(a.Remaining, b.Remaining)
+}
+
+func fishEqual(a, b fishState) bool {
+	return !floatChanged(a.X, b.X) && !floatChanged(a.Y, b.Y) && !floatChanged(a.Size, b.Size) && a.Alive == b.Alive && a.Type == b.Type && a.Direction == b.Direction
+}
+
+func powerUpEqual(a, b powerUpState) bool {
+	return !floatChanged(a.X, b.X) && !floatChanged(a.Y, b.Y) && !floatChanged(a.Size, b.Size) && !floatChanged(a.Remaining, b.Remaining) && a.Active == b.Active
+}
+
+func wallsEqual(a, b []wall) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if floatChanged(a[i].X, b[i].X) || floatChanged(a[i].Y, b[i].Y) || floatChanged(a[i].Width, b[i].Width) || floatChanged(a[i].Height, b[i].Height) {
+			return false
+		}
+	}
+	return true
+}
+
+func minesEqual(a, b []mine) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if floatChanged(a[i].X, b[i].X) || floatChanged(a[i].Y, b[i].Y) || floatChanged(a[i].Size, b[i].Size) {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneWalls(src []wall) []wall {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]wall, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func cloneMines(src []mine) []mine {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]mine, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func (r *room) snapshotLocked() gameState {
+	stateCopy := r.state
+	players := make([]*playerState, 0, len(r.players))
+	for _, p := range r.players {
+		copy := *p
+		players = append(players, &copy)
+	}
+	stateCopy.Players = players
+	stateCopy.Walls = cloneWalls(r.state.Walls)
+	stateCopy.Mines = cloneMines(r.state.Mines)
+	return stateCopy
+}
+
+func (p playerPatch) isEmpty() bool {
+	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && len(p.Appearance) == 0 && p.AppearanceJSON == nil
+}
+
+func buildPlayerPatch(previous, current *playerState) *playerPatch {
+	if current == nil {
+		return nil
+	}
+	patch := playerPatch{ID: current.ID}
+	if previous == nil || previous.Name != current.Name {
+		patch.Name = stringPtr(current.Name)
+	}
+	if previous == nil || previous.Ready != current.Ready {
+		patch.Ready = boolPtr(current.Ready)
+	}
+	if previous == nil || previous.Alive != current.Alive {
+		patch.Alive = boolPtr(current.Alive)
+	}
+	if previous == nil || floatChanged(previous.X, current.X) {
+		patch.X = floatPtr(current.X)
+	}
+	if previous == nil || floatChanged(previous.Y, current.Y) {
+		patch.Y = floatPtr(current.Y)
+	}
+	if previous == nil || floatChanged(previous.Size, current.Size) {
+		patch.Size = floatPtr(current.Size)
+	}
+	if previous == nil || previous.Facing != current.Facing {
+		patch.Facing = intPtr(current.Facing)
+	}
+	if previous == nil || previous.Moving != current.Moving {
+		patch.Moving = boolPtr(current.Moving)
+	}
+	if previous == nil || floatChanged(previous.WalkCycle, current.WalkCycle) {
+		patch.WalkCycle = floatPtr(current.WalkCycle)
+	}
+	if previous == nil || floatChanged(previous.StepAccum, current.StepAccum) {
+		patch.StepAccum = floatPtr(current.StepAccum)
+	}
+	if previous == nil || previous.Score != current.Score {
+		patch.Score = intPtr(current.Score)
+	}
+	if previous == nil || previous.AppearanceJSON != current.AppearanceJSON {
+		patch.Appearance = current.Appearance
+		patch.AppearanceJSON = stringPtr(current.AppearanceJSON)
+	}
+	if patch.isEmpty() {
+		return nil
+	}
+	return &patch
+}
+
+func (p *statePatch) isEmpty() bool {
+	return p == nil || (p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.Message == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.ServerTime == nil)
+}
+
+func buildStatePatch(previous, current gameState) *statePatch {
+	patch := &statePatch{}
+
+	if previous.Phase != current.Phase {
+		patch.Phase = stringPtr(current.Phase)
+	}
+	if floatChanged(previous.Countdown, current.Countdown) {
+		patch.Countdown = floatPtr(current.Countdown)
+	}
+	if floatChanged(previous.Remaining, current.Remaining) {
+		patch.Remaining = floatPtr(current.Remaining)
+	}
+	if previous.Message != current.Message {
+		patch.Message = stringPtr(current.Message)
+	}
+	if previous.WinnerID != current.WinnerID {
+		patch.WinnerID = stringPtr(current.WinnerID)
+	}
+	if !statusEqual(previous.Status, current.Status) {
+		patch.Status = current.Status
+	}
+	if !fishEqual(previous.Fish, current.Fish) {
+		fishCopy := current.Fish
+		patch.Fish = &fishCopy
+	}
+	if !powerUpEqual(previous.PowerUp, current.PowerUp) {
+		powerCopy := current.PowerUp
+		patch.PowerUp = &powerCopy
+	}
+	if !wallsEqual(previous.Walls, current.Walls) {
+		patch.Walls = cloneWalls(current.Walls)
+	}
+	if !minesEqual(previous.Mines, current.Mines) {
+		patch.Mines = cloneMines(current.Mines)
+	}
+
+	prevPlayers := make(map[string]*playerState)
+	for _, p := range previous.Players {
+		prevPlayers[p.ID] = p
+	}
+	currentPlayers := make(map[string]*playerState)
+	for _, p := range current.Players {
+		currentPlayers[p.ID] = p
+	}
+
+	for id := range prevPlayers {
+		if _, ok := currentPlayers[id]; !ok {
+			patch.RemovedPlayers = append(patch.RemovedPlayers, id)
+		}
+	}
+
+	for id, p := range currentPlayers {
+		patchEntry := buildPlayerPatch(prevPlayers[id], p)
+		if patchEntry != nil {
+			patch.Players = append(patch.Players, *patchEntry)
+		}
+	}
+
+	currentTime := current.ServerTime
+	patch.ServerTime = &currentTime
+
+	if patch.isEmpty() {
+		return nil
+	}
+	return patch
+}
+
 type room struct {
-	name        string
-	players     map[string]*playerState
-	inputs      map[string]vector
-	connections map[*websocket.Conn]string
-	state       gameState
-	server      *server
-	mu          sync.Mutex
-	cancel      chan struct{}
+	name              string
+	players           map[string]*playerState
+	inputs            map[string]vector
+	connections       map[*websocket.Conn]string
+	state             gameState
+	server            *server
+	mu                sync.Mutex
+	cancel            chan struct{}
+	lastBroadcast     *gameState
+	lastFullBroadcast time.Time
 }
 
 type server struct {
@@ -499,13 +744,7 @@ func (r *room) ensurePlayer(id, name string) *playerState {
 
 func (r *room) sendFullState(conn *websocket.Conn) {
 	r.mu.Lock()
-	stateCopy := r.state
-	players := make([]*playerState, 0, len(r.players))
-	for _, p := range r.players {
-		copy := *p
-		players = append(players, &copy)
-	}
-	stateCopy.Players = players
+	stateCopy := r.snapshotLocked()
 	r.mu.Unlock()
 
 	data, _ := json.Marshal(wsMessage{Type: "state", State: &stateCopy})
@@ -776,19 +1015,38 @@ func (r *room) updateLobbyMessageLocked() {
 
 func (r *room) broadcastState() {
 	r.mu.Lock()
-	stateCopy := r.state
-	players := make([]*playerState, 0, len(r.players))
-	for _, p := range r.players {
-		copy := *p
-		players = append(players, &copy)
+	stateCopy := r.snapshotLocked()
+	previous := r.lastBroadcast
+	lastFull := r.lastFullBroadcast
+	connections := make([]*websocket.Conn, 0, len(r.connections))
+	for conn := range r.connections {
+		connections = append(connections, conn)
 	}
-	stateCopy.Players = players
 	r.mu.Unlock()
 
-	data, _ := json.Marshal(wsMessage{Type: "state", State: &stateCopy})
+	shouldSendFull := previous == nil || time.Since(lastFull) > 3*time.Second
+	var data []byte
+	if shouldSendFull {
+		data, _ = json.Marshal(wsMessage{Type: "state", State: &stateCopy, Full: true})
+	} else {
+		patch := buildStatePatch(*previous, stateCopy)
+		if patch == nil || patch.isEmpty() {
+			r.mu.Lock()
+			r.lastBroadcast = &stateCopy
+			r.mu.Unlock()
+			return
+		}
+		data, _ = json.Marshal(wsMessage{Type: "state", Patch: patch})
+	}
+
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	for conn := range r.connections {
+	r.lastBroadcast = &stateCopy
+	if shouldSendFull {
+		r.lastFullBroadcast = time.Now()
+	}
+	r.mu.Unlock()
+
+	for _, conn := range connections {
 		conn.WriteMessage(websocket.TextMessage, data)
 	}
 }

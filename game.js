@@ -2799,6 +2799,72 @@ class MultiplayerLobby {
   unregisterActiveRoom() {}
 }
 
+function applyMultiplayerStatePatch(previousState, patch) {
+  if (!previousState || !patch) {
+    return previousState;
+  }
+  const nextState = { ...previousState };
+  if (patch.serverTime !== undefined) {
+    nextState.serverTime = patch.serverTime;
+  }
+  if (patch.phase !== undefined) {
+    nextState.phase = patch.phase;
+  }
+  if (patch.countdown !== undefined) {
+    nextState.countdown = patch.countdown;
+  }
+  if (patch.remaining !== undefined) {
+    nextState.remaining = patch.remaining;
+  }
+  if (patch.message !== undefined) {
+    nextState.message = patch.message;
+  }
+  if (patch.winnerId !== undefined) {
+    nextState.winnerId = patch.winnerId;
+  }
+  if (patch.statusEffect !== undefined) {
+    nextState.statusEffect = patch.statusEffect || null;
+  }
+  if (patch.fish) {
+    nextState.fish = { ...previousState.fish, ...patch.fish };
+  }
+  if (patch.powerUp) {
+    nextState.powerUp = { ...previousState.powerUp, ...patch.powerUp };
+  }
+  if (Array.isArray(patch.walls)) {
+    nextState.walls = patch.walls.map((wall) => ({ ...wall }));
+  }
+  if (Array.isArray(patch.mines)) {
+    nextState.mines = patch.mines.map((mine) => ({ ...mine }));
+  }
+
+  const playerMap = new Map((previousState.players || []).map((player) => [player.id, { ...player }]));
+  if (Array.isArray(patch.removedPlayers)) {
+    patch.removedPlayers.forEach((id) => playerMap.delete(id));
+  }
+  if (Array.isArray(patch.players)) {
+    patch.players.forEach((update) => {
+      if (!update?.id) {
+        return;
+      }
+      const existing = playerMap.get(update.id) || { id: update.id };
+      const merged = { ...existing };
+      Object.entries(update).forEach(([key, value]) => {
+        if (key === "id") {
+          return;
+        }
+        if (value !== undefined) {
+          merged[key] = value;
+        }
+      });
+      playerMap.set(update.id, merged);
+    });
+  }
+  nextState.players = Array.from(playerMap.values());
+
+  return nextState;
+}
+
 class MultiplayerManager {
   constructor(lobby) {
     this.playerId = playerId;
@@ -2886,7 +2952,7 @@ class MultiplayerManager {
   handleSocketMessage(message) {
     switch (message?.type) {
       case "state":
-        this.handleServerState(message.state || message);
+        this.handleServerState(message);
         break;
       case "chat":
         this.handleChatMessage(message.message || message);
@@ -2901,25 +2967,36 @@ class MultiplayerManager {
     }
   }
 
-  handleServerState(state) {
-    const previousState = this.state;
-    if (!state) {
+  handleServerState(payload) {
+    if (!payload) {
       return;
     }
-    this.state = state;
-    this.handleStateAudio(previousState, state);
-    syncMultiplayerStatusEffect(state.statusEffect);
-    if (state.phase === "playing" || state.phase === "countdown") {
+    const previousState = this.state;
+    let nextState = null;
+    if (payload.patch && this.state) {
+      nextState = applyMultiplayerStatePatch(this.state, payload.patch);
+    } else if (payload.state) {
+      nextState = payload.state;
+    } else if (!payload.patch) {
+      nextState = payload;
+    }
+    if (!nextState) {
+      return;
+    }
+    this.state = nextState;
+    this.handleStateAudio(previousState, nextState);
+    syncMultiplayerStatusEffect(nextState.statusEffect);
+    if (nextState.phase === "playing" || nextState.phase === "countdown") {
       hideMultiplayerOverlay();
       hideMultiplayerChat({ reset: false });
       hideRestartButton();
-    } else if (state.phase === "ended") {
+    } else if (nextState.phase === "ended") {
       showMultiplayerOverlay();
       showMultiplayerLobby();
       showMultiplayerChat(this.roomName);
       showRestartButton();
     }
-    this.ready = Boolean(state.players?.find((player) => player.id === this.playerId)?.ready);
+    this.ready = Boolean(nextState.players?.find((player) => player.id === this.playerId)?.ready);
     this.updateReadyButton();
     this.updateHud();
     this.updateLobbyUI();
