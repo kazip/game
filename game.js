@@ -46,6 +46,7 @@ const fish = {
   y: 0,
   size: 28,
   alive: false,
+  spawned: false,
   type: "normal",
   direction: 1
 };
@@ -3182,7 +3183,13 @@ class MultiplayerManager {
     }
     const currentFish = this.state.fish;
     const previousFish = this.previousRenderState?.fish;
-    if (!previousFish || !previousFish.alive || !currentFish.alive) {
+    if (
+      !previousFish ||
+      !previousFish.alive ||
+      !currentFish.alive ||
+      currentFish.spawned ||
+      previousFish.spawned
+    ) {
       return currentFish;
     }
 

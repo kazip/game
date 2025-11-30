@@ -252,6 +252,7 @@ export function encodeStateToBase64(state) {
   writer.writeFloat32(state.fish?.y || 0);
   writer.writeFloat32(state.fish?.size || 0);
   writer.writeBool(Boolean(state.fish?.alive));
+  writer.writeBool(Boolean(state.fish?.spawned));
   writer.writeInt16(Number(state.fish?.direction) || 0);
 
   writer.writeBool(Boolean(state.powerUp?.active));
@@ -331,6 +332,7 @@ function decodeFullState(reader) {
     y: reader.readFloat32(),
     size: reader.readFloat32(),
     alive: reader.readBool(),
+    spawned: reader.readBool(),
     direction: reader.readInt16()
   };
 
@@ -397,6 +399,7 @@ function decodePatch(reader) {
       y: reader.readFloat32(),
       size: reader.readFloat32(),
       alive: reader.readBool(),
+      spawned: reader.readBool(),
       direction: reader.readInt16()
     };
   }
