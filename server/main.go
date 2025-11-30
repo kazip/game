@@ -90,7 +90,7 @@ type wsMessage struct {
 	Message    *chatMessage  `json:"message,omitempty"`
 	Appearance catAppearance `json:"appearance,omitempty"`
 	State      *gameState    `json:"state,omitempty"`
-	Error      string        `json:"message,omitempty"`
+	Error      string        `json:"error,omitempty"`
 }
 
 type chatMessage struct {
