@@ -213,6 +213,8 @@ const JOYSTICK_DEADZONE = 0.22;
 let joystickPointerId = null;
 const joystickVector = { x: 0, y: 0 };
 
+window.CAT_SERVER_URL = 'http://188.120.224.193:8080'
+
 const API_BASE_URL =
   typeof window !== "undefined" && window.CAT_SERVER_URL
     ? window.CAT_SERVER_URL

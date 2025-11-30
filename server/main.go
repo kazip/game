@@ -600,14 +600,29 @@ func writeJSON(w http.ResponseWriter, payload any) {
 	json.NewEncoder(w).Encode(payload)
 }
 
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	srv := newServer()
 
-	http.HandleFunc("/api/cats/{id}", srv.handleCats)
-	http.HandleFunc("/api/scores", srv.handleScores)
-	http.HandleFunc("/api/rooms", srv.handleRooms)
-	http.HandleFunc("/ws", srv.handleWS)
+	http.Handle("/api/cats/{id}", withCORS(http.HandlerFunc(srv.handleCats)))
+	http.Handle("/api/scores", withCORS(http.HandlerFunc(srv.handleScores)))
+	http.Handle("/api/rooms", withCORS(http.HandlerFunc(srv.handleRooms)))
+	http.Handle("/ws", withCORS(http.HandlerFunc(srv.handleWS))) // можно и без CORS, но не помешает
 
 	addr := ":8080"
 	log.Printf("Cat game server listening on %s", addr)
