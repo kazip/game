@@ -134,6 +134,7 @@ type powerUpState struct {
 	Size      float64 `json:"size"`
 	Active    bool    `json:"active"`
 	Remaining float64 `json:"remaining"`
+	Type      string  `json:"type"`
 }
 
 type statusEffect struct {
