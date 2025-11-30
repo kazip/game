@@ -123,7 +123,7 @@ const TIMER_MODES = {
 
 const SHARED_TIMER_START = 20;
 const SHARED_TIMER_NORMAL_BONUS = 2;
-const SHARED_TIMER_GOLDEN_BONUS = 5;
+const SHARED_TIMER_GOLDEN_BONUS = 1;
 const SHARED_TIMER_MINE_PENALTY = 5;
 
 let score = 0;
@@ -131,6 +131,7 @@ let remaining = NORMAL_FISH_TIME_LIMIT;
 let lastTimestamp = 0;
 let gameOver = false;
 let goldenChainActive = false;
+let goldenChainRemaining = 0;
 let singleTimerMode = TIMER_MODES.PER_FISH;
 const messageEl = document.getElementById("message");
 const restartBtn = document.getElementById("restart");
@@ -1942,10 +1943,27 @@ function updateTimerDisplay(value = remaining) {
 
 function spawnFish() {
   const margin = 30;
-  const shouldSpawnGolden = goldenChainActive || Math.random() < GOLDEN_FISH_CHANCE;
+  let shouldSpawnGolden = false;
+
+  if (isSharedTimerMode()) {
+    if (goldenChainActive && goldenChainRemaining > 0) {
+      shouldSpawnGolden = true;
+      goldenChainRemaining -= 1;
+    } else {
+      goldenChainActive = false;
+      goldenChainRemaining = 0;
+      if (Math.random() < GOLDEN_FISH_CHANCE) {
+        shouldSpawnGolden = true;
+        goldenChainActive = true;
+        goldenChainRemaining = Math.floor(Math.random() * 5);
+      }
+    }
+  } else {
+    shouldSpawnGolden = Math.random() < GOLDEN_FISH_CHANCE;
+  }
+
   fish.type = shouldSpawnGolden ? "golden" : "normal";
   fish.direction = Math.random() < 0.5 ? -1 : 1;
-  goldenChainActive = shouldSpawnGolden;
   const catCell = positionToGridCell(cat.x, cat.y);
   let placed = false;
   let attempts = 0;
@@ -2012,6 +2030,7 @@ function resetGame() {
   cat.stepAccumulator = 0;
   cat.facing = 1;
   goldenChainActive = false;
+  goldenChainRemaining = 0;
   powerUp.active = false;
   powerUp.remaining = 0;
   clearStatusEffect();
@@ -2131,7 +2150,17 @@ function update(delta) {
       const isGoldenFish = fish.type === "golden";
       score += isGoldenFish ? GOLDEN_FISH_POINTS : NORMAL_FISH_POINTS;
       scoreEl.textContent = score;
-      goldenChainActive = isGoldenFish;
+      if (isSharedTimerMode()) {
+        if (isGoldenFish) {
+          goldenChainActive = goldenChainRemaining > 0;
+        } else {
+          goldenChainActive = false;
+          goldenChainRemaining = 0;
+        }
+      } else {
+        goldenChainActive = false;
+        goldenChainRemaining = 0;
+      }
       if (isSharedTimerMode()) {
         remaining += isGoldenFish ? SHARED_TIMER_GOLDEN_BONUS : SHARED_TIMER_NORMAL_BONUS;
         updateTimerDisplay();
@@ -2192,6 +2221,7 @@ function update(delta) {
     if (missedFishType === "golden") {
       fish.alive = false;
       goldenChainActive = false;
+      goldenChainRemaining = 0;
       spawnFish();
     } else {
       endGame("Котик не успел поймать рыбку!");
