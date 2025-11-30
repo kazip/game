@@ -3186,6 +3186,16 @@ class MultiplayerManager {
       return currentFish;
     }
 
+    const remainingIncreased =
+      typeof currentFish.remaining === "number" &&
+      typeof previousFish.remaining === "number" &&
+      currentFish.remaining > previousFish.remaining + 0.01;
+    const typeChanged = currentFish.type !== previousFish.type;
+
+    if (remainingIncreased || typeChanged) {
+      return currentFish;
+    }
+
     const clampedProgress = clamp(progress ?? 1, 0, 1);
     const interpolateValue = (from, to) => from + (to - from) * clampedProgress;
 
