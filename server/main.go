@@ -1932,38 +1932,49 @@ func circleIntersectsAnyWall(cx, cy, radius float64, walls []wall) bool {
 }
 
 func resolveEntityWallCollisions(entity *playerState, walls []wall) {
-	radius := entity.Size/2 + 2
-	for _, w := range walls {
-		closestX := clampFloat(entity.X, w.X, w.X+w.Width)
-		closestY := clampFloat(entity.Y, w.Y, w.Y+w.Height)
-		dx := entity.X - closestX
-		dy := entity.Y - closestY
-		if dx*dx+dy*dy >= radius*radius {
-			continue
-		}
-		if w.Width < w.Height {
-			if entity.X < w.X+w.Width/2 {
-				dx = -1
-			} else {
-				dx = 1
+	if entity == nil || len(walls) == 0 {
+		return
+	}
+
+	radius := entity.Size / 2
+	moved := true
+	iterations := 0
+
+	for moved && iterations < 4 {
+		moved = false
+		iterations++
+		for _, w := range walls {
+			closestX := clampFloat(entity.X, w.X, w.X+w.Width)
+			closestY := clampFloat(entity.Y, w.Y, w.Y+w.Height)
+			dx := entity.X - closestX
+			dy := entity.Y - closestY
+			distanceSquared := dx*dx + dy*dy
+			if distanceSquared < radius*radius {
+				if distanceSquared == 0 {
+					if w.Width < w.Height {
+						dx = -1
+						if entity.X >= w.X+w.Width/2 {
+							dx = 1
+						}
+						dy = 0
+					} else {
+						dy = -1
+						if entity.Y >= w.Y+w.Height/2 {
+							dy = 1
+						}
+						dx = 0
+					}
+					distanceSquared = 1
+				}
+				distance := math.Sqrt(distanceSquared)
+				overlap := radius - distance
+				nx := dx / distance
+				ny := dy / distance
+				entity.X += nx * overlap
+				entity.Y += ny * overlap
+				moved = true
 			}
-			dy = 0
-		} else {
-			if entity.Y < w.Y+w.Height/2 {
-				dy = -1
-			} else {
-				dy = 1
-			}
-			dx = 0
 		}
-		norm := math.Hypot(dx, dy)
-		if norm == 0 {
-			continue
-		}
-		dx /= norm
-		dy /= norm
-		entity.X = closestX + dx*radius
-		entity.Y = closestY + dy*radius
 	}
 }
 
