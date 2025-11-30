@@ -42,6 +42,7 @@ const (
 	timeIncreaseLimit = 15.0
 	timeDecreaseLimit = 5.0
 	dataFileName      = "data.json"
+	reconnectGrace    = 10 * time.Second
 )
 
 var (
@@ -934,6 +935,7 @@ type room struct {
 	players            map[string]*playerState
 	inputs             map[string]vector
 	connections        map[*websocket.Conn]string
+	disconnectTimers   map[string]*time.Timer
 	state              gameState
 	lastBroadcastState *gameState
 	server             *server
@@ -967,12 +969,13 @@ func (s *server) getOrCreateRoom(name string) *room {
 		return existing
 	}
 	r := &room{
-		name:        name,
-		players:     make(map[string]*playerState),
-		inputs:      make(map[string]vector),
-		connections: make(map[*websocket.Conn]string),
-		cancel:      make(chan struct{}),
-		server:      s,
+		name:             name,
+		players:          make(map[string]*playerState),
+		inputs:           make(map[string]vector),
+		connections:      make(map[*websocket.Conn]string),
+		disconnectTimers: make(map[string]*time.Timer),
+		cancel:           make(chan struct{}),
+		server:           s,
 	}
 	r.state = gameState{
 		RoomName:   name,
@@ -1174,6 +1177,7 @@ func (r *room) handleConnection(conn *websocket.Conn, playerID, playerName strin
 	r.mu.Lock()
 	r.connections[conn] = playerID
 	_ = r.ensurePlayer(playerID, playerName)
+	r.cancelDisconnectTimerLocked(playerID)
 	r.mu.Unlock()
 
 	r.sendFullState(conn)
@@ -1256,12 +1260,40 @@ func (r *room) dropConnection(conn *websocket.Conn) {
 	delete(r.connections, conn)
 	conn.Close()
 	if ok {
-		delete(r.inputs, id)
-		delete(r.players, id)
+		r.inputs[id] = vector{}
+		r.schedulePlayerRemovalLocked(id)
+	}
+}
+
+func (r *room) schedulePlayerRemovalLocked(playerID string) {
+	if timer, ok := r.disconnectTimers[playerID]; ok {
+		timer.Stop()
+	}
+
+	timer := time.AfterFunc(reconnectGrace, func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+
+		currentTimer, ok := r.disconnectTimers[playerID]
+		if !ok || currentTimer != timer {
+			return
+		}
+		delete(r.disconnectTimers, playerID)
+		delete(r.inputs, playerID)
+		delete(r.players, playerID)
 		if len(r.players) == 0 {
 			r.state.Phase = "lobby"
 			r.state.Message = "Ожидаем игроков"
 		}
+	})
+
+	r.disconnectTimers[playerID] = timer
+}
+
+func (r *room) cancelDisconnectTimerLocked(playerID string) {
+	if timer, ok := r.disconnectTimers[playerID]; ok {
+		timer.Stop()
+		delete(r.disconnectTimers, playerID)
 	}
 }
 
