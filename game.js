@@ -2809,6 +2809,9 @@ function applyMultiplayerStatePatch(previousState, patch) {
   if (patch.serverTime !== undefined) {
     nextState.serverTime = patch.serverTime;
   }
+  if (patch.tickIndex !== undefined) {
+    nextState.tickIndex = patch.tickIndex;
+  }
   if (patch.phase !== undefined) {
     nextState.phase = patch.phase;
   }
@@ -2817,6 +2820,9 @@ function applyMultiplayerStatePatch(previousState, patch) {
   }
   if (patch.remaining !== undefined) {
     nextState.remaining = patch.remaining;
+  }
+  if (patch.goldenChainActive !== undefined) {
+    nextState.goldenChainActive = patch.goldenChainActive;
   }
   if (patch.message !== undefined) {
     nextState.message = patch.message;
@@ -2987,9 +2993,9 @@ class MultiplayerManager {
     if (!buffer) {
       return;
     }
-    const state = decodeStateFromBase64(buffer);
-    if (state) {
-      this.handleServerState({ state });
+    const payload = decodeStateFromBase64(buffer);
+    if (payload?.state || payload?.patch) {
+      this.handleServerState(payload);
     }
   }
 

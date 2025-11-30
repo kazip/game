@@ -98,7 +98,6 @@ export class MultiplayerServer {
       player.name = meta.name || player.name;
       if (sanitizeAppearance) {
         player.appearance = sanitizeAppearance(meta.appearance || player.appearance);
-        player.appearanceJson = JSON.stringify(player.appearance || {}).slice(0, 300);
       }
     });
 
@@ -133,8 +132,7 @@ export class MultiplayerServer {
       moving: false,
       walkCycle: 0,
       stepAccumulator: 0,
-      appearance,
-      appearanceJson: JSON.stringify(appearance || {}).slice(0, 300)
+      appearance
     };
   }
 
@@ -209,7 +207,6 @@ export class MultiplayerServer {
       return;
     }
     player.appearance = sanitizeAppearance(appearance || player.appearance);
-    player.appearanceJson = JSON.stringify(player.appearance || {}).slice(0, 300);
     this.needsImmediateBroadcast = true;
     this.forceBroadcast = true;
   }

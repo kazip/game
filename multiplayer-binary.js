@@ -4,6 +4,7 @@ const decoder = new TextDecoder();
 const PHASE_CODES = { lobby: 0, countdown: 1, playing: 2, ended: 3 };
 const FISH_TYPE_CODES = { normal: 0, golden: 1, timeIncrease: 2, timeDecrease: 3 };
 const POWER_UP_TYPE_CODES = { none: 0, fast: 1, slow: 2, invert: 3 };
+const MESSAGE_TYPES = { full: 0, patch: 1 };
 
 class BinaryWriter {
   constructor() {
@@ -191,8 +192,7 @@ function encodePlayers(players = [], writer) {
     writer.writeBool(Boolean(player.moving));
     writer.writeFloat32(player.walkCycle || 0);
     writer.writeFloat32(player.stepAccumulator || 0);
-    const appearance =
-      player.appearanceJson || (player.appearance ? JSON.stringify(player.appearance).slice(0, 300) : "");
+    const appearance = player.appearance ? JSON.stringify(player.appearance).slice(0, 300) : "";
     writer.writeString(appearance || "");
   });
 }
@@ -231,6 +231,7 @@ function decodePlayers(reader) {
 
 export function encodeStateToBase64(state) {
   const writer = new BinaryWriter();
+  writer.writeUint8(MESSAGE_TYPES.full);
   writer.writeUint32(Math.floor(state.serverTime || 0));
   writer.writeUint32(state.tickIndex >>> 0 || 0);
   writer.writeString(state.roomName || "");
@@ -284,11 +285,34 @@ function toReader(payload) {
   return new BinaryReader(fromBase64(base64));
 }
 
-export function decodeStateFromBase64(payload) {
-  const reader = toReader(payload);
-  if (!reader) {
-    return null;
+function decodePlayerPatch(reader) {
+  const id = reader.readString();
+  const flags1 = reader.readUint8();
+  const flags2 = reader.readUint8();
+  const patch = { id };
+  if (flags1 & (1 << 0)) patch.name = reader.readString();
+  if (flags1 & (1 << 1)) patch.ready = reader.readBool();
+  if (flags1 & (1 << 2)) patch.alive = reader.readBool();
+  if (flags1 & (1 << 3)) patch.x = reader.readFloat32();
+  if (flags1 & (1 << 4)) patch.y = reader.readFloat32();
+  if (flags1 & (1 << 5)) patch.size = reader.readFloat32();
+  if (flags1 & (1 << 6)) patch.facing = reader.readInt16();
+  if (flags1 & (1 << 7)) patch.moving = reader.readBool();
+  if (flags2 & (1 << 0)) patch.walkCycle = reader.readFloat32();
+  if (flags2 & (1 << 1)) patch.stepAccumulator = reader.readFloat32();
+  if (flags2 & (1 << 2)) patch.score = reader.readUint32();
+  if (flags2 & (1 << 3)) {
+    const appearanceString = reader.readString();
+    try {
+      patch.appearance = appearanceString ? JSON.parse(appearanceString) : {};
+    } catch (error) {
+      patch.appearance = {};
+    }
   }
+  return patch;
+}
+
+function decodeFullState(reader) {
   const serverTime = reader.readUint32();
   const tickIndex = reader.readUint32();
   const roomName = reader.readString();
@@ -327,22 +351,99 @@ export function decodeStateFromBase64(payload) {
   const players = decodePlayers(reader);
 
   return {
-    phase: Object.keys(PHASE_CODES).find((key) => PHASE_CODES[key] === phaseCode) || "lobby",
-    countdown,
-    remaining,
-    message,
-    winnerId: winnerId || null,
-    goldenChainActive,
-    statusEffect: statusType ? { type: statusType, remaining: statusRemaining } : null,
-    fish,
-    powerUp,
-    walls,
-    mines,
-    players,
-    serverTime,
-    tickIndex,
-    roomName
+    state: {
+      phase: Object.keys(PHASE_CODES).find((key) => PHASE_CODES[key] === phaseCode) || "lobby",
+      countdown,
+      remaining,
+      message,
+      winnerId: winnerId || null,
+      goldenChainActive,
+      statusEffect: statusType ? { type: statusType, remaining: statusRemaining } : null,
+      fish,
+      powerUp,
+      walls,
+      mines,
+      players,
+      serverTime,
+      tickIndex,
+      roomName
+    }
   };
+}
+
+function decodePatch(reader) {
+  const serverTime = reader.readUint32();
+  const tickIndex = reader.readUint32();
+  const flags1 = reader.readUint8();
+  const flags2 = reader.readUint8();
+  const patch = { serverTime, tickIndex };
+
+  if (flags1 & (1 << 0)) patch.phase = reader.readString();
+  if (flags1 & (1 << 1)) patch.countdown = reader.readFloat32();
+  if (flags1 & (1 << 2)) patch.remaining = reader.readFloat32();
+  if (flags1 & (1 << 3)) patch.message = reader.readString();
+  if (flags1 & (1 << 4)) patch.winnerId = reader.readString();
+  if (flags1 & (1 << 5)) patch.goldenChainActive = reader.readBool();
+  if (flags1 & (1 << 6)) {
+    const statusType = reader.readString();
+    const statusRemaining = reader.readFloat32();
+    patch.statusEffect = statusType ? { type: statusType, remaining: statusRemaining } : null;
+  }
+  if (flags1 & (1 << 7)) {
+    const fishType = reader.readUint8();
+    patch.fish = {
+      type: Object.keys(FISH_TYPE_CODES).find((key) => FISH_TYPE_CODES[key] === fishType) || "normal",
+      x: reader.readFloat32(),
+      y: reader.readFloat32(),
+      size: reader.readFloat32(),
+      alive: reader.readBool(),
+      direction: reader.readInt16()
+    };
+  }
+
+  if (flags2 & (1 << 0)) {
+    patch.powerUp = {
+      active: reader.readBool(),
+      x: reader.readFloat32(),
+      y: reader.readFloat32(),
+      size: reader.readFloat32(),
+      remaining: reader.readFloat32(),
+      type: Object.keys(POWER_UP_TYPE_CODES).find((key) => POWER_UP_TYPE_CODES[key] === reader.readUint8()) || null
+    };
+  }
+  if (flags2 & (1 << 1)) {
+    patch.walls = decodeWalls(reader);
+  }
+  if (flags2 & (1 << 2)) {
+    patch.mines = decodeMines(reader);
+  }
+  if (flags2 & (1 << 3)) {
+    const count = reader.readUint8();
+    patch.players = [];
+    for (let i = 0; i < count; i += 1) {
+      patch.players.push(decodePlayerPatch(reader));
+    }
+  }
+  if (flags2 & (1 << 4)) {
+    const count = reader.readUint8();
+    patch.removedPlayers = [];
+    for (let i = 0; i < count; i += 1) {
+      patch.removedPlayers.push(reader.readString());
+    }
+  }
+  return { patch };
+}
+
+export function decodeStateFromBase64(payload) {
+  const reader = toReader(payload);
+  if (!reader) {
+    return null;
+  }
+  const messageType = reader.readUint8();
+  if (messageType === MESSAGE_TYPES.patch) {
+    return decodePatch(reader);
+  }
+  return decodeFullState(reader);
 }
 
 export function encodeInputToBase64(playerId, vector) {
