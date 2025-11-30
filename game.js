@@ -2140,8 +2140,18 @@ function update(delta) {
     const normalizedX = horizontalInput / (length || 1);
     const normalizedY = verticalInput / (length || 1);
     const distance = cat.speed * speedMultiplier * delta * cappedMagnitude;
-    cat.x += normalizedX * distance;
-    cat.y += normalizedY * distance;
+    const deltaX = normalizedX * distance;
+    const deltaY = normalizedY * distance;
+
+    if (deltaX !== 0) {
+      cat.x += deltaX;
+      resolveCatWallCollisions();
+    }
+
+    if (deltaY !== 0) {
+      cat.y += deltaY;
+      resolveCatWallCollisions();
+    }
     cat.moving = true;
     if (Math.abs(normalizedX) > 0.1) {
       cat.facing = normalizedX >= 0 ? 1 : -1;
