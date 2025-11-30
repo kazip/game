@@ -192,7 +192,6 @@ type statePatch struct {
 	Message        *string       `json:"message,omitempty"`
 	WinnerID       *string       `json:"winnerId,omitempty"`
 	Golden         *bool         `json:"goldenChainActive,omitempty"`
-	ServerTime     *int64        `json:"serverTime,omitempty"`
 	Status         *statusEffect `json:"statusEffect,omitempty"`
 	Fish           *fishState    `json:"fish,omitempty"`
 	PowerUp        *powerUpState `json:"powerUp,omitempty"`
@@ -561,14 +560,10 @@ func encodePlayerPatchBinary(p playerPatch, writer *binaryWriter) {
 	}
 }
 
-func encodePatchBinary(patch *statePatch, tickIndex uint32) []byte {
+func encodePatchBinary(patch *statePatch, serverTime int64, tickIndex uint32) []byte {
 	writer := &binaryWriter{}
 	writer.writeUint8(messageTypePatch)
-	var serverTime uint32
-	if patch.ServerTime != nil {
-		serverTime = uint32(*patch.ServerTime)
-	}
-	writer.writeUint32(serverTime)
+	writer.writeUint32(uint32(serverTime))
 	writer.writeUint32(tickIndex)
 
 	var flags1 uint8
@@ -737,7 +732,7 @@ func fishEqual(a, b fishState) bool {
 }
 
 func powerUpEqual(a, b powerUpState) bool {
-	return !floatChanged(a.X, b.X) && !floatChanged(a.Y, b.Y) && !floatChanged(a.Size, b.Size) && !floatChanged(a.Remaining, b.Remaining) && a.Active == b.Active
+	return !floatChanged(a.X, b.X) && !floatChanged(a.Y, b.Y) && !floatChanged(a.Size, b.Size) && !floatChanged(a.Remaining, b.Remaining) && a.Active == b.Active && a.Type == b.Type
 }
 
 func wallsEqual(a, b []wall) bool {
@@ -857,7 +852,7 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 }
 
 func (p *statePatch) isEmpty() bool {
-	return p == nil || (p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.Message == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.ServerTime == nil && p.Golden == nil)
+	return p == nil || (p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.Message == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
 }
 
 func buildStatePatch(previous, current gameState) *statePatch {
@@ -920,9 +915,6 @@ func buildStatePatch(previous, current gameState) *statePatch {
 			patch.Players = append(patch.Players, *patchEntry)
 		}
 	}
-
-	currentTime := current.ServerTime
-	patch.ServerTime = &currentTime
 
 	if patch.isEmpty() {
 		return nil
@@ -1637,9 +1629,9 @@ func (r *room) broadcastState() {
 	if previous == nil {
 		data = encodeStateBinary(stateCopy)
 	} else if patch := buildStatePatch(*previous, stateCopy); patch != nil {
-		data = encodePatchBinary(patch, stateCopy.TickIndex)
+		data = encodePatchBinary(patch, stateCopy.ServerTime, stateCopy.TickIndex)
 	} else {
-		data = encodeStateBinary(stateCopy)
+		return
 	}
 	for _, conn := range connections {
 		conn.WriteMessage(websocket.BinaryMessage, data)
@@ -2098,8 +2090,28 @@ func stringifyAppearance(app catAppearance) string {
 	if len(app) == 0 {
 		return ""
 	}
-	b, _ := json.Marshal(app)
-	return string(b)
+
+	keys := make([]string, 0, len(app))
+	for key := range app {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, key := range keys {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		keyJSON, _ := json.Marshal(key)
+		buf.Write(keyJSON)
+		buf.WriteByte(':')
+		valueJSON, _ := json.Marshal(app[key])
+		buf.Write(valueJSON)
+	}
+	buf.WriteByte('}')
+
+	return buf.String()
 }
 
 func clampFloat(v, min, max float64) float64 {
