@@ -2902,48 +2902,58 @@ class MultiplayerManager {
     this.chatMessages = [];
     this.lobby = lobby;
     this.lastLocalStepAccumulator = 0;
+    this.reconnectEnabled = false;
+    this.reconnectTimer = null;
+    this.reconnectAttempts = 0;
+    this.closedByUser = false;
+    this.reconnecting = false;
   }
 
   async join(roomName, playerName) {
+    await this.leave();
     this.roomName = roomName;
     this.playerName = playerName;
     this.ready = false;
+    this.reconnectEnabled = true;
+    this.reconnectAttempts = 0;
+    this.reconnecting = false;
+    this.closedByUser = false;
+    this.cancelReconnectTimer();
     this.resetChat();
 
+    await this.openSocket();
+  }
+
+  async leave() {
+    this.stopRenderLoop();
+    this.reconnectEnabled = false;
+    this.closedByUser = true;
+    this.cancelReconnectTimer();
+    if (this.socket) {
+      this.socket.close();
+    }
+    this.socket = null;
+    this.state = null;
+    this.previousRenderState = null;
+    this.smoothingStartTime = 0;
+    this.ready = false;
+    this.roomName = "";
+    this.playerName = "";
+    this.updateReadyButton();
+    this.updateHud();
+  }
+
+  async openSocket() {
     const params = new URLSearchParams({
-      room: roomName,
+      room: this.roomName,
       playerId: this.playerId,
-      name: playerName
+      name: this.playerName
     });
     const socketUrl = `${WS_BASE_URL}/ws?${params.toString()}`;
-    await this.leave();
 
     this.socket = new WebSocket(socketUrl);
-    this.socket.addEventListener("open", () => {
-      this.sendMessage({ type: "appearance", appearance: sanitizeAppearance(cat.appearance) });
-      this.sendMessage({ type: "ready", ready: this.ready });
-      this.updateReadyButton();
-    });
-    this.socket.addEventListener("message", async (event) => {
-      try {
-        if (typeof event.data === "string") {
-          const payload = JSON.parse(event.data);
-          this.handleSocketMessage(payload);
-        } else if (event.data instanceof Blob) {
-          const buffer = await event.data.arrayBuffer();
-          this.handleBinaryMessage(buffer);
-        } else if (event.data instanceof ArrayBuffer) {
-          this.handleBinaryMessage(event.data);
-        }
-      } catch (error) {
-        console.warn("Ошибка обработки сообщения сервера", error);
-      }
-    });
-    this.socket.addEventListener("close", () => {
-      this.socket = null;
-      this.updateReadyButton();
-      this.updateHud();
-    });
+    this.attachSocketHandlers();
+
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("Подключение заняло слишком много времени")), 4000);
       const handleOpen = () => {
@@ -2959,18 +2969,86 @@ class MultiplayerManager {
     });
   }
 
-  async leave() {
-    this.stopRenderLoop();
-    if (this.socket) {
-      this.socket.close();
-    }
+  attachSocketHandlers() {
+    this.socket?.addEventListener("open", () => {
+      this.reconnectAttempts = 0;
+      this.reconnecting = false;
+      this.closedByUser = false;
+      this.sendMessage({ type: "appearance", appearance: sanitizeAppearance(cat.appearance) });
+      this.sendMessage({ type: "ready", ready: this.ready });
+      this.updateReadyButton();
+    });
+
+    this.socket?.addEventListener("message", async (event) => {
+      try {
+        if (typeof event.data === "string") {
+          const payload = JSON.parse(event.data);
+          this.handleSocketMessage(payload);
+        } else if (event.data instanceof Blob) {
+          const buffer = await event.data.arrayBuffer();
+          this.handleBinaryMessage(buffer);
+        } else if (event.data instanceof ArrayBuffer) {
+          this.handleBinaryMessage(event.data);
+        }
+      } catch (error) {
+        console.warn("Ошибка обработки сообщения сервера", error);
+      }
+    });
+
+    this.socket?.addEventListener("close", () => this.handleSocketClose());
+  }
+
+  handleSocketClose() {
     this.socket = null;
-    this.state = null;
-    this.previousRenderState = null;
-    this.smoothingStartTime = 0;
-    this.ready = false;
     this.updateReadyButton();
     this.updateHud();
+    if (!this.reconnectEnabled || !this.roomName || this.closedByUser) {
+      return;
+    }
+    this.scheduleReconnect();
+  }
+
+  scheduleReconnect() {
+    if (this.reconnectTimer) {
+      return;
+    }
+    this.reconnecting = true;
+    const delay = this.getReconnectDelay();
+    if (multiplayerStatusEl) {
+      multiplayerStatusEl.textContent = "Потеряно соединение, переподключаемся...";
+    }
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.attemptReconnect();
+    }, delay);
+  }
+
+  getReconnectDelay() {
+    const base = 500;
+    const max = 5000;
+    const delay = base * Math.pow(2, this.reconnectAttempts);
+    return Math.min(max, delay);
+  }
+
+  cancelReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  async attemptReconnect() {
+    if (!this.reconnectEnabled || !this.roomName) {
+      return;
+    }
+    this.reconnectAttempts += 1;
+    this.closedByUser = false;
+    try {
+      await this.openSocket();
+    } catch (error) {
+      console.warn("Не удалось переподключиться", error);
+      this.scheduleReconnect();
+    }
   }
 
   sendMessage(payload) {
