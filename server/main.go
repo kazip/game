@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"math/rand"
@@ -19,11 +20,24 @@ const (
 	catSpeed          = 180.0
 	catSize           = 36.0
 	fishSize          = 28.0
+	gridSize          = 10
+	gridCellSize      = worldSize / gridSize
+	wallThickness     = gridCellSize * 0.6
+	maxWallTotalLen   = 10
 	tickRate          = time.Second / 60
 	broadcastRate     = time.Second / 15
 	countdownDuration = 3 * time.Second
 	roundDuration     = 60 * time.Second
 	fishCatchDistance = 34.0
+	maxMines          = 3
+	mineSize          = 26.0
+	mineMinDistance   = 25.0
+	powerUpSize       = 34.0
+	powerUpChance     = 0.05
+	powerUpLifetime   = 5.0
+	powerUpDuration   = 30.0
+	timeIncreaseLimit = 15.0
+	timeDecreaseLimit = 5.0
 	dataFileName      = "data.json"
 )
 
@@ -81,8 +95,50 @@ type gameState struct {
 	Message    string         `json:"message"`
 	Players    []*playerState `json:"players"`
 	Fish       fishState      `json:"fish"`
+	Walls      []wall         `json:"walls"`
+	Mines      []mine         `json:"mines"`
+	PowerUp    powerUpState   `json:"powerUp"`
+	Status     *statusEffect  `json:"statusEffect"`
 	WinnerID   string         `json:"winnerId"`
 	ServerTime int64          `json:"serverTime"`
+}
+
+type wall struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+type mine struct {
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	Size float64 `json:"size"`
+}
+
+type powerUpState struct {
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
+	Size      float64 `json:"size"`
+	Active    bool    `json:"active"`
+	Remaining float64 `json:"remaining"`
+}
+
+type statusEffect struct {
+	Type      string  `json:"type"`
+	Remaining float64 `json:"remaining"`
+}
+
+type gridCell struct {
+	Row int
+	Col int
+}
+
+type wallSegment struct {
+	Row         int
+	Col         int
+	Length      int
+	Orientation string
 }
 
 type wsMessage struct {
@@ -149,6 +205,7 @@ func (s *server) getOrCreateRoom(name string) *room {
 		RoomName:   name,
 		Phase:      "lobby",
 		Fish:       fishState{X: worldSize / 2, Y: worldSize / 2, Size: fishSize, Alive: false, Type: "normal", Direction: 1},
+		PowerUp:    powerUpState{Size: powerUpSize},
 		Remaining:  roundDuration.Seconds(),
 		Message:    "Ожидаем игроков",
 		ServerTime: time.Now().UnixMilli(),
@@ -486,6 +543,8 @@ func (r *room) step() {
 		}
 	case "playing":
 		r.state.Remaining -= tickRate.Seconds()
+		r.updateStatusEffectLocked()
+		r.updatePowerUpLocked()
 		r.updatePlayersLocked()
 		r.updateFishLocked()
 		if r.state.Remaining <= 0 {
@@ -501,6 +560,10 @@ func (r *room) beginRoundLocked() {
 	r.state.Countdown = 0
 	r.state.Remaining = roundDuration.Seconds()
 	r.state.Message = "Раунд начался"
+	r.state.Status = nil
+	r.state.Walls = nil
+	r.state.Mines = nil
+	r.state.PowerUp = powerUpState{Size: powerUpSize}
 	r.spawnFishLocked()
 	for _, p := range r.players {
 		p.Alive = true
@@ -530,11 +593,15 @@ func (r *room) bestPlayerIDLocked() string {
 }
 
 func (r *room) updatePlayersLocked() {
+	speedMultiplier := r.getSpeedMultiplierLocked()
 	for id, p := range r.players {
+		if !p.Alive {
+			continue
+		}
 		input := r.inputs[id]
-		speed := catSpeed * tickRate.Seconds()
-		p.X = clampFloat(p.X+input.X*speed, p.Size/2, worldSize-p.Size/2)
-		p.Y = clampFloat(p.Y+input.Y*speed, p.Size/2, worldSize-p.Size/2)
+		speed := catSpeed * tickRate.Seconds() * speedMultiplier
+		p.X += input.X * speed
+		p.Y += input.Y * speed
 		p.Moving = math.Abs(input.X) > 0.01 || math.Abs(input.Y) > 0.01
 		if p.Moving {
 			p.Facing = 1
@@ -543,6 +610,25 @@ func (r *room) updatePlayersLocked() {
 			}
 			p.StepAccum += tickRate.Seconds() * 4
 			p.WalkCycle = math.Mod(p.StepAccum, 1)
+		}
+		resolveEntityWallCollisions(p, r.state.Walls)
+		p.X = clampFloat(p.X, p.Size/2, worldSize-p.Size/2)
+		p.Y = clampFloat(p.Y, p.Size/2, worldSize-p.Size/2)
+
+		if r.state.PowerUp.Active {
+			dist := math.Hypot(p.X-r.state.PowerUp.X, p.Y-r.state.PowerUp.Y)
+			if dist < (p.Size+r.state.PowerUp.Size)/2 {
+				r.state.PowerUp.Active = false
+				r.state.PowerUp.Remaining = 0
+				r.applyRandomStatusEffectLocked()
+			}
+		}
+		for _, m := range r.state.Mines {
+			if math.Hypot(p.X-m.X, p.Y-m.Y) < (p.Size+m.Size)/2 {
+				p.Alive = false
+				p.Moving = false
+				break
+			}
 		}
 	}
 }
@@ -562,13 +648,108 @@ func (r *room) updateFishLocked() {
 	}
 }
 
+func (r *room) updatePowerUpLocked() {
+	if r.state.Phase != "playing" {
+		return
+	}
+	if !r.state.PowerUp.Active {
+		return
+	}
+	r.state.PowerUp.Remaining -= tickRate.Seconds()
+	if r.state.PowerUp.Remaining <= 0 {
+		r.clearPowerUpLocked()
+		return
+	}
+}
+
+func (r *room) updateStatusEffectLocked() {
+	if r.state.Status == nil {
+		return
+	}
+	r.state.Status.Remaining -= tickRate.Seconds()
+	if r.state.Status.Remaining <= 0 {
+		r.state.Status = nil
+	}
+}
+
+func (r *room) getSpeedMultiplierLocked() float64 {
+	if r.state.Status == nil {
+		return 1
+	}
+	switch r.state.Status.Type {
+	case "speedUp":
+		return 2
+	case "speedDown":
+		return 1 / 1.5
+	default:
+		return 1
+	}
+}
+
 func (r *room) spawnFishLocked() {
-	r.state.Fish.Alive = true
-	r.state.Fish.X = 40 + rand.Float64()*(worldSize-80)
-	r.state.Fish.Y = 40 + rand.Float64()*(worldSize-80)
-	r.state.Fish.Size = fishSize
-	r.state.Fish.Type = "normal"
-	r.state.Fish.Direction = 1
+	margin := 30.0
+	fish := &r.state.Fish
+	alivePlayers := make([]*playerState, 0, len(r.players))
+	for _, p := range r.players {
+		if p.Alive {
+			alivePlayers = append(alivePlayers, p)
+		}
+	}
+	if len(alivePlayers) == 0 {
+		for _, p := range r.players {
+			alivePlayers = append(alivePlayers, p)
+			break
+		}
+	}
+
+	catCells := make([]gridCell, 0, len(alivePlayers))
+	for _, p := range alivePlayers {
+		catCells = append(catCells, positionToGridCell(p.X, p.Y))
+	}
+
+	placed := false
+	for attempt := 0; attempt < 200; attempt++ {
+		x := margin + rand.Float64()*(worldSize-margin*2)
+		y := margin + rand.Float64()*(worldSize-margin*2)
+		fishCell := positionToGridCell(x, y)
+		if containsCell(catCells, fishCell) {
+			continue
+		}
+		candidateWalls := r.generateWallsLayoutForPlayers(catCells, fishCell)
+		if candidateWalls == nil {
+			continue
+		}
+		if circleIntersectsAnyWall(x, y, fish.Size/2+2, candidateWalls) {
+			continue
+		}
+		r.state.Walls = candidateWalls
+		r.handlePowerUpAfterWallChangeLocked()
+		r.resolvePlayersAfterWallChangeLocked()
+		fish.X = x
+		fish.Y = y
+		fish.Alive = true
+		fish.Size = fishSize
+		fish.Type = "normal"
+		fish.Direction = 1
+		r.state.Mines = r.generateMinesLocked()
+		r.refreshPowerUpLocked()
+		placed = true
+		break
+	}
+
+	if !placed {
+		r.state.Walls = nil
+		r.handlePowerUpAfterWallChangeLocked()
+		r.resolvePlayersAfterWallChangeLocked()
+		fish.X = worldSize / 2
+		fish.Y = worldSize / 2
+		fish.Alive = true
+		fish.Size = fishSize
+		fish.Type = "normal"
+		fish.Direction = 1
+		r.state.Mines = r.generateMinesLocked()
+		r.refreshPowerUpLocked()
+	}
 }
 
 func (r *room) updateLobbyMessageLocked() {
@@ -620,6 +801,412 @@ func (r *room) broadcastChat(msg chatMessage) {
 	for conn := range r.connections {
 		conn.WriteMessage(websocket.TextMessage, data)
 	}
+}
+
+func (r *room) applyRandomStatusEffectLocked() {
+	effects := []string{"speedUp", "speedDown", "timeIncrease", "timeDecrease"}
+	if len(effects) == 0 {
+		return
+	}
+	typeChoice := effects[rand.Intn(len(effects))]
+	r.state.Status = &statusEffect{Type: typeChoice, Remaining: powerUpDuration}
+	if typeChoice == "timeIncrease" {
+		r.state.Remaining = math.Max(r.state.Remaining, timeIncreaseLimit)
+	} else if typeChoice == "timeDecrease" {
+		r.state.Remaining = math.Min(r.state.Remaining, timeDecreaseLimit)
+	}
+}
+
+func (r *room) clearPowerUpLocked() {
+	r.state.PowerUp.Active = false
+	r.state.PowerUp.Remaining = 0
+	r.state.PowerUp.X = 0
+	r.state.PowerUp.Y = 0
+}
+
+func (r *room) spawnPowerUpLocked() {
+	margin := 36.0
+	for attempt := 0; attempt < 40; attempt++ {
+		x := margin + rand.Float64()*(worldSize-margin*2)
+		y := margin + rand.Float64()*(worldSize-margin*2)
+		if !circleIntersectsAnyWall(x, y, r.state.PowerUp.Size/2+2, r.state.Walls) {
+			r.state.PowerUp.X = x
+			r.state.PowerUp.Y = y
+			r.state.PowerUp.Active = true
+			r.state.PowerUp.Remaining = powerUpLifetime
+			return
+		}
+	}
+	r.clearPowerUpLocked()
+}
+
+func (r *room) refreshPowerUpLocked() {
+	if rand.Float64() < powerUpChance {
+		r.spawnPowerUpLocked()
+	} else if r.state.PowerUp.Active {
+		r.state.PowerUp.Remaining = math.Min(r.state.PowerUp.Remaining, powerUpLifetime)
+	} else {
+		r.clearPowerUpLocked()
+	}
+}
+
+func (r *room) resolvePlayersAfterWallChangeLocked() {
+	for _, p := range r.players {
+		resolveEntityWallCollisions(p, r.state.Walls)
+		p.X = clampFloat(p.X, p.Size/2, worldSize-p.Size/2)
+		p.Y = clampFloat(p.Y, p.Size/2, worldSize-p.Size/2)
+	}
+}
+
+func (r *room) handlePowerUpAfterWallChangeLocked() {
+	if r.state.PowerUp.Active && circleIntersectsAnyWall(r.state.PowerUp.X, r.state.PowerUp.Y, r.state.PowerUp.Size/2+2, r.state.Walls) {
+		r.clearPowerUpLocked()
+	}
+}
+
+func (r *room) generateWallsLayoutForPlayers(catCells []gridCell, fishCell gridCell) []wall {
+	if len(catCells) == 0 {
+		return nil
+	}
+	for attempt := 0; attempt < 160; attempt++ {
+		segments := r.buildRandomWallSegments(catCells, fishCell)
+		if segments == nil {
+			continue
+		}
+		blockedGrid := buildBlockedGridFromSegments(segments)
+		allReachable := true
+		for _, c := range catCells {
+			if !isPathAvailable(c, fishCell, blockedGrid) {
+				allReachable = false
+				break
+			}
+		}
+		if !allReachable {
+			continue
+		}
+		candidateWalls := convertSegmentsToWalls(segments)
+		intersectsPlayer := false
+		for _, p := range r.players {
+			if entityIntersectsWalls(p, candidateWalls) {
+				intersectsPlayer = true
+				break
+			}
+		}
+		if intersectsPlayer {
+			continue
+		}
+		return candidateWalls
+	}
+	return nil
+}
+
+func (r *room) buildRandomWallSegments(catCells []gridCell, fishCell gridCell) []wallSegment {
+	segments := []wallSegment{}
+	occupied := make(map[string]struct{})
+	totalLength := 0
+	attempts := 0
+	fishKey := cellKey(fishCell)
+	catKeys := make(map[string]struct{}, len(catCells))
+	for _, c := range catCells {
+		catKeys[cellKey(c)] = struct{}{}
+	}
+
+	for totalLength < maxWallTotalLen && attempts < 80 {
+		attempts++
+		if len(segments) >= 2 && rand.Float64() < 0.35 {
+			break
+		}
+		remaining := maxWallTotalLen - totalLength
+		if remaining <= 0 {
+			continue
+		}
+		maxSegmentLen := remaining
+		if maxSegmentLen > 3 {
+			maxSegmentLen = 3
+		}
+		length := 1 + rand.Intn(int(maxSegmentLen))
+		orientation := "horizontal"
+		if rand.Float64() < 0.5 {
+			orientation = "vertical"
+		}
+		maxRow := gridSize - 1
+		maxCol := gridSize - length
+		if orientation == "vertical" {
+			maxRow = gridSize - length
+			maxCol = gridSize - 1
+		}
+		if maxRow < 0 || maxCol < 0 {
+			continue
+		}
+		row := rand.Intn(maxRow + 1)
+		col := rand.Intn(maxCol + 1)
+		cells := getCellsForSegment(row, col, length, orientation)
+		invalid := false
+		for _, cell := range cells {
+			key := cellKey(cell)
+			if _, taken := occupied[key]; taken {
+				invalid = true
+				break
+			}
+			if _, isCat := catKeys[key]; isCat || key == fishKey {
+				invalid = true
+				break
+			}
+		}
+		if invalid {
+			continue
+		}
+		for _, cell := range cells {
+			occupied[cellKey(cell)] = struct{}{}
+		}
+		segments = append(segments, wallSegment{Row: row, Col: col, Length: length, Orientation: orientation})
+		totalLength += length
+	}
+
+	if len(segments) < 2 {
+		return nil
+	}
+	return segments
+}
+
+func (r *room) generateMinesLocked() []mine {
+	result := []mine{}
+	mineCount := rand.Intn(maxMines + 1)
+	if mineCount == 0 {
+		return result
+	}
+	radius := mineSize / 2
+	margin := radius + mineMinDistance + 4
+	attempts := 0
+
+	for len(result) < mineCount && attempts < 200 {
+		attempts++
+		x := margin + rand.Float64()*(worldSize-margin*2)
+		y := margin + rand.Float64()*(worldSize-margin*2)
+		if !r.isMinePositionValidLocked(x, y, radius, result) {
+			continue
+		}
+		result = append(result, mine{X: x, Y: y, Size: mineSize})
+	}
+	return result
+}
+
+func (r *room) isMinePositionValidLocked(x, y, radius float64, existing []mine) bool {
+	safeRadius := radius + mineMinDistance
+	if x-safeRadius < 0 || y-safeRadius < 0 || x+safeRadius > worldSize || y+safeRadius > worldSize {
+		return false
+	}
+	if circleIntersectsAnyWall(x, y, safeRadius, r.state.Walls) {
+		return false
+	}
+	if r.state.Fish.Alive {
+		dist := math.Hypot(x-r.state.Fish.X, y-r.state.Fish.Y)
+		if dist <= r.state.Fish.Size/2+safeRadius {
+			return false
+		}
+	}
+	for _, p := range r.players {
+		if !p.Alive {
+			continue
+		}
+		dist := math.Hypot(x-p.X, y-p.Y)
+		if dist <= p.Size/2+safeRadius {
+			return false
+		}
+	}
+	for _, m := range existing {
+		dist := math.Hypot(x-m.X, y-m.Y)
+		if dist <= m.Size/2+radius+mineMinDistance {
+			return false
+		}
+	}
+	return true
+}
+
+func clampGridIndex(v int) int {
+	if v < 0 {
+		return 0
+	}
+	if v >= gridSize {
+		return gridSize - 1
+	}
+	return v
+}
+
+func positionToGridCell(x, y float64) gridCell {
+	col := clampGridIndex(int(math.Floor(x / gridCellSize)))
+	row := clampGridIndex(int(math.Floor(y / gridCellSize)))
+	return gridCell{Row: row, Col: col}
+}
+
+func getCellsForSegment(row, col, length int, orientation string) []gridCell {
+	cells := make([]gridCell, 0, length)
+	for offset := 0; offset < length; offset++ {
+		currentRow := row
+		currentCol := col
+		if orientation == "horizontal" {
+			currentCol += offset
+		} else {
+			currentRow += offset
+		}
+		cells = append(cells, gridCell{Row: currentRow, Col: currentCol})
+	}
+	return cells
+}
+
+func buildBlockedGridFromSegments(segments []wallSegment) [][]bool {
+	grid := make([][]bool, gridSize)
+	for i := range grid {
+		grid[i] = make([]bool, gridSize)
+	}
+	for _, seg := range segments {
+		for offset := 0; offset < seg.Length; offset++ {
+			row := seg.Row
+			col := seg.Col
+			if seg.Orientation == "horizontal" {
+				col += offset
+			} else {
+				row += offset
+			}
+			if row >= 0 && row < gridSize && col >= 0 && col < gridSize {
+				grid[row][col] = true
+			}
+		}
+	}
+	return grid
+}
+
+func isPathAvailable(catCell, fishCell gridCell, blocked [][]bool) bool {
+	startKey := cellKey(catCell)
+	targetKey := cellKey(fishCell)
+	visited := map[string]struct{}{startKey: {}}
+	queue := []gridCell{catCell}
+	deltas := [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		key := cellKey(current)
+		if key == targetKey {
+			return true
+		}
+		for _, delta := range deltas {
+			nextRow := current.Row + delta[0]
+			nextCol := current.Col + delta[1]
+			if nextRow < 0 || nextRow >= gridSize || nextCol < 0 || nextCol >= gridSize {
+				continue
+			}
+			if blocked[nextRow][nextCol] {
+				continue
+			}
+			nextCell := gridCell{Row: nextRow, Col: nextCol}
+			nextKey := cellKey(nextCell)
+			if _, ok := visited[nextKey]; ok {
+				continue
+			}
+			visited[nextKey] = struct{}{}
+			queue = append(queue, nextCell)
+		}
+	}
+	return false
+}
+
+func convertSegmentsToWalls(segments []wallSegment) []wall {
+	walls := make([]wall, 0, len(segments))
+	for _, seg := range segments {
+		if seg.Orientation == "horizontal" {
+			walls = append(walls, wall{
+				X:      float64(seg.Col) * gridCellSize,
+				Y:      float64(seg.Row)*gridCellSize + (gridCellSize-wallThickness)/2,
+				Width:  float64(seg.Length) * gridCellSize,
+				Height: wallThickness,
+			})
+		} else {
+			walls = append(walls, wall{
+				X:      float64(seg.Col)*gridCellSize + (gridCellSize-wallThickness)/2,
+				Y:      float64(seg.Row) * gridCellSize,
+				Width:  wallThickness,
+				Height: float64(seg.Length) * gridCellSize,
+			})
+		}
+	}
+	return walls
+}
+
+func circleIntersectsRect(cx, cy, radius float64, rect wall) bool {
+	closestX := clampFloat(cx, rect.X, rect.X+rect.Width)
+	closestY := clampFloat(cy, rect.Y, rect.Y+rect.Height)
+	dx := cx - closestX
+	dy := cy - closestY
+	return dx*dx+dy*dy < radius*radius
+}
+
+func circleIntersectsAnyWall(cx, cy, radius float64, walls []wall) bool {
+	for _, w := range walls {
+		if circleIntersectsRect(cx, cy, radius, w) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveEntityWallCollisions(entity *playerState, walls []wall) {
+	radius := entity.Size/2 + 2
+	for _, w := range walls {
+		closestX := clampFloat(entity.X, w.X, w.X+w.Width)
+		closestY := clampFloat(entity.Y, w.Y, w.Y+w.Height)
+		dx := entity.X - closestX
+		dy := entity.Y - closestY
+		if dx*dx+dy*dy >= radius*radius {
+			continue
+		}
+		if w.Width < w.Height {
+			if entity.X < w.X+w.Width/2 {
+				dx = -1
+			} else {
+				dx = 1
+			}
+			dy = 0
+		} else {
+			if entity.Y < w.Y+w.Height/2 {
+				dy = -1
+			} else {
+				dy = 1
+			}
+			dx = 0
+		}
+		norm := math.Hypot(dx, dy)
+		if norm == 0 {
+			continue
+		}
+		dx /= norm
+		dy /= norm
+		entity.X = closestX + dx*radius
+		entity.Y = closestY + dy*radius
+	}
+}
+
+func entityIntersectsWalls(entity *playerState, walls []wall) bool {
+	radius := entity.Size/2 + 2
+	for _, w := range walls {
+		if circleIntersectsRect(entity.X, entity.Y, radius, w) {
+			return true
+		}
+	}
+	return false
+}
+
+func cellKey(c gridCell) string {
+	return fmt.Sprintf("%d,%d", c.Row, c.Col)
+}
+
+func containsCell(cells []gridCell, target gridCell) bool {
+	for _, c := range cells {
+		if c.Row == target.Row && c.Col == target.Col {
+			return true
+		}
+	}
+	return false
 }
 
 func stringifyAppearance(app catAppearance) string {
