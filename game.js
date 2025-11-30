@@ -77,6 +77,9 @@ const mines = [];
 const MAX_MINES = 3;
 const MINE_SIZE = 26;
 const MINE_MIN_DISTANCE = 25;
+const SURVIVAL_MINE_BASE_COUNT = 1;
+const SURVIVAL_MINE_INCREMENT = 1;
+const SURVIVAL_MAX_MINES = 12;
 
 const POWER_UP_CHANCE = 0.05;
 const POWER_UP_LIFETIME = 5;
@@ -118,7 +121,8 @@ const GOLDEN_FISH_POINTS = 5;
 
 const TIMER_MODES = {
   PER_FISH: "per-fish",
-  SHARED: "shared"
+  SHARED: "shared",
+  SURVIVAL: "survival"
 };
 
 const SHARED_TIMER_START = 20;
@@ -133,6 +137,7 @@ let gameOver = false;
 let goldenChainActive = false;
 let goldenChainRemaining = 0;
 let singleTimerMode = TIMER_MODES.PER_FISH;
+let survivalMineCount = SURVIVAL_MINE_BASE_COUNT;
 const messageEl = document.getElementById("message");
 const restartBtn = document.getElementById("restart");
 const scoreEl = document.getElementById("score");
@@ -173,6 +178,7 @@ const catPreviewCtx = catPreviewCanvas?.getContext("2d") ?? null;
 const modeOverlay = document.getElementById("mode-overlay");
 const startSingleBtn = document.getElementById("start-single");
 const startSingleSharedBtn = document.getElementById("start-single-shared");
+const startSurvivalBtn = document.getElementById("start-survival");
 const startMultiplayerBtn = document.getElementById("start-multiplayer");
 const multiplayerOverlay = document.getElementById("multiplayer-overlay");
 const multiplayerJoinForm = document.getElementById("multiplayer-join-form");
@@ -698,6 +704,7 @@ function startSingleMode(timerModeOverride = TIMER_MODES.PER_FISH) {
   hideMultiplayerOverlay();
   showRestartButton();
   singleTimerMode = timerModeOverride;
+  survivalMineCount = SURVIVAL_MINE_BASE_COUNT;
   gameMode = "single";
   gameOver = true;
   hideModeSelection();
@@ -946,19 +953,24 @@ function isMinePositionValid(x, y, radius) {
   return true;
 }
 
-function spawnMines() {
+function spawnMines(overrideCount = null) {
   clearMines();
 
-  const mineCount = Math.floor(Math.random() * (MAX_MINES + 1));
-  if (mineCount === 0) {
+  const targetCount =
+    typeof overrideCount === "number"
+      ? clamp(Math.floor(overrideCount), 0, SURVIVAL_MAX_MINES)
+      : Math.floor(Math.random() * (MAX_MINES + 1));
+
+  if (targetCount === 0) {
     return;
   }
 
   const radius = MINE_SIZE / 2;
   const margin = radius + MINE_MIN_DISTANCE + 4;
   let attempts = 0;
+  const maxAttempts = 200 + targetCount * 10;
 
-  while (mines.length < mineCount && attempts < 200) {
+  while (mines.length < targetCount && attempts < maxAttempts) {
     attempts += 1;
     const candidateX = margin + Math.random() * (WORLD_SIZE - margin * 2);
     const candidateY = margin + Math.random() * (WORLD_SIZE - margin * 2);
@@ -1935,6 +1947,10 @@ function isSharedTimerMode() {
   return gameMode === "single" && singleTimerMode === TIMER_MODES.SHARED;
 }
 
+function isSurvivalMode() {
+  return gameMode === "single" && singleTimerMode === TIMER_MODES.SURVIVAL;
+}
+
 function updateTimerDisplay(value = remaining) {
   if (timerEl) {
     timerEl.textContent = Math.max(value, 0).toFixed(1);
@@ -2009,7 +2025,8 @@ function spawnFish() {
     remaining = getFishTimeLimitForFish(fish.type);
     updateTimerDisplay();
   }
-  spawnMines();
+  const mineCount = isSurvivalMode() ? survivalMineCount : null;
+  spawnMines(mineCount);
   maybeSpawnPowerUp();
 }
 
@@ -2031,6 +2048,7 @@ function resetGame() {
   cat.facing = 1;
   goldenChainActive = false;
   goldenChainRemaining = 0;
+  survivalMineCount = SURVIVAL_MINE_BASE_COUNT;
   powerUp.active = false;
   powerUp.remaining = 0;
   clearStatusEffect();
@@ -2164,6 +2182,12 @@ function update(delta) {
       if (isSharedTimerMode()) {
         remaining += isGoldenFish ? SHARED_TIMER_GOLDEN_BONUS : SHARED_TIMER_NORMAL_BONUS;
         updateTimerDisplay();
+      }
+      if (isSurvivalMode()) {
+        survivalMineCount = Math.min(
+          survivalMineCount + SURVIVAL_MINE_INCREMENT,
+          SURVIVAL_MAX_MINES
+        );
       }
       spawnFish();
       soundManager.playCatch();
@@ -3629,6 +3653,12 @@ if (startSingleBtn) {
 if (startSingleSharedBtn) {
   startSingleSharedBtn.addEventListener("click", () => {
     startSingleMode(TIMER_MODES.SHARED);
+  });
+}
+
+if (startSurvivalBtn) {
+  startSurvivalBtn.addEventListener("click", () => {
+    startSingleMode(TIMER_MODES.SURVIVAL);
   });
 }
 
