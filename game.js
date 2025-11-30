@@ -2880,6 +2880,9 @@ class MultiplayerManager {
     this.roomName = "";
     this.socket = null;
     this.state = null;
+    this.previousRenderState = null;
+    this.smoothingStartTime = 0;
+    this.smoothingDuration = 1000 / 15;
     this.ready = false;
     this.inputVector = { x: 0, y: 0 };
     this.lastInputSentAt = 0;
@@ -2952,6 +2955,8 @@ class MultiplayerManager {
     }
     this.socket = null;
     this.state = null;
+    this.previousRenderState = null;
+    this.smoothingStartTime = 0;
     this.ready = false;
     this.updateReadyButton();
     this.updateHud();
@@ -3015,6 +3020,9 @@ class MultiplayerManager {
     if (!nextState) {
       return;
     }
+    const now = performance.now();
+    this.previousRenderState = previousState || nextState;
+    this.smoothingStartTime = now;
     this.state = nextState;
     this.handleStateAudio(previousState, nextState);
     syncMultiplayerStatusEffect(nextState.statusEffect);
@@ -3102,17 +3110,59 @@ class MultiplayerManager {
       this.stopRenderLoop();
       return;
     }
+    const elapsed = performance.now() - this.smoothingStartTime;
+    const progress = this.smoothingDuration > 0 ? clamp(elapsed / this.smoothingDuration, 0, 1) : 1;
     prepareCanvasForFrame();
     if (this.state) {
+      const players = this.getInterpolatedPlayers(progress);
       drawWallsCollection(this.state.walls || []);
       drawMinesCollection(this.state.mines || []);
       drawPowerUpSprite(this.state.powerUp);
       drawFishSprite(this.state.fish);
-      (this.state.players || []).forEach((player) => {
+      players.forEach((player) => {
         drawCatSprite(player);
       });
     }
     multiplayerRenderHandle = requestAnimationFrame(this.renderFrameBound);
+  }
+
+  getInterpolatedPlayers(progress) {
+    if (!this.state) {
+      return [];
+    }
+    const clampedProgress = clamp(progress ?? 1, 0, 1);
+    const currentPlayers = this.state.players || [];
+    const previousPlayers = this.previousRenderState?.players || [];
+    if (previousPlayers.length === 0 || currentPlayers.length === 0) {
+      return currentPlayers;
+    }
+    const previousById = new Map(previousPlayers.map((player) => [player.id, player]));
+    return currentPlayers.map((player) => {
+      const previous = previousById.get(player.id);
+      if (!previous) {
+        return player;
+      }
+      const interpolateValue = (from, to) => from + (to - from) * clampedProgress;
+      let stepAccumulator = player.stepAccumulator;
+      if (typeof previous.stepAccumulator === "number" && typeof player.stepAccumulator === "number") {
+        let diff = player.stepAccumulator - previous.stepAccumulator;
+        if (diff > 0.5) {
+          diff -= 1;
+        } else if (diff < -0.5) {
+          diff += 1;
+        }
+        stepAccumulator = previous.stepAccumulator + diff * clampedProgress;
+      }
+
+      return {
+        ...player,
+        x: interpolateValue(previous.x ?? player.x, player.x ?? previous.x),
+        y: interpolateValue(previous.y ?? player.y, player.y ?? previous.y),
+        size: interpolateValue(previous.size ?? player.size, player.size ?? previous.size),
+        walkCycle: interpolateValue(previous.walkCycle ?? player.walkCycle, player.walkCycle ?? previous.walkCycle),
+        stepAccumulator
+      };
+    });
   }
 
   toggleReady() {
