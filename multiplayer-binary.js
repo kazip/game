@@ -142,10 +142,10 @@ function fromBase64(base64) {
 function encodeWalls(walls = [], writer) {
   writer.writeUint16(Math.min(walls.length, 1024));
   walls.slice(0, 1024).forEach((wall) => {
-    writer.writeFloat32(wall.x1 || 0);
-    writer.writeFloat32(wall.y1 || 0);
-    writer.writeFloat32(wall.x2 || 0);
-    writer.writeFloat32(wall.y2 || 0);
+    writer.writeFloat32(wall.x || 0);
+    writer.writeFloat32(wall.y || 0);
+    writer.writeFloat32(wall.width || 0);
+    writer.writeFloat32(wall.height || 0);
   });
 }
 
@@ -153,7 +153,7 @@ function decodeWalls(reader) {
   const count = reader.readUint16();
   const walls = [];
   for (let i = 0; i < count; i += 1) {
-    walls.push({ x1: reader.readFloat32(), y1: reader.readFloat32(), x2: reader.readFloat32(), y2: reader.readFloat32() });
+    walls.push({ x: reader.readFloat32(), y: reader.readFloat32(), width: reader.readFloat32(), height: reader.readFloat32() });
   }
   return walls;
 }
@@ -267,13 +267,28 @@ export function encodeStateToBase64(state) {
   return toBase64(writer.toUint8Array());
 }
 
-export function decodeStateFromBase64(payload) {
+function toReader(payload) {
+  if (!payload) {
+    return null;
+  }
+  if (payload instanceof ArrayBuffer) {
+    return new BinaryReader(new Uint8Array(payload));
+  }
+  if (payload instanceof Uint8Array) {
+    return new BinaryReader(payload);
+  }
   const base64 = typeof payload === "string" ? payload : payload?.binary || payload?.b;
   if (!base64) {
     return null;
   }
-  const buffer = fromBase64(base64);
-  const reader = new BinaryReader(buffer);
+  return new BinaryReader(fromBase64(base64));
+}
+
+export function decodeStateFromBase64(payload) {
+  const reader = toReader(payload);
+  if (!reader) {
+    return null;
+  }
   const serverTime = reader.readUint32();
   const tickIndex = reader.readUint32();
   const roomName = reader.readString();
@@ -338,12 +353,18 @@ export function encodeInputToBase64(playerId, vector) {
   return toBase64(writer.toUint8Array());
 }
 
+export function encodeInputToBuffer(playerId, vector) {
+  const writer = new BinaryWriter();
+  writer.writeString(playerId || "");
+  writer.writeFloat32(vector?.x || 0);
+  writer.writeFloat32(vector?.y || 0);
+  return writer.toUint8Array();
+}
+
 export function decodeInputFromBase64(payload) {
-  const base64 = typeof payload === "string" ? payload : payload?.binary || payload?.b;
-  if (!base64) {
+  const reader = toReader(payload);
+  if (!reader) {
     return null;
   }
-  const buffer = fromBase64(base64);
-  const reader = new BinaryReader(buffer);
   return { playerId: reader.readString(), vector: { x: reader.readFloat32(), y: reader.readFloat32() } };
 }

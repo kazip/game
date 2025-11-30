@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -39,6 +41,12 @@ const (
 	timeIncreaseLimit = 15.0
 	timeDecreaseLimit = 5.0
 	dataFileName      = "data.json"
+)
+
+var (
+	phaseCodes       = map[string]uint8{"lobby": 0, "countdown": 1, "playing": 2, "ended": 3}
+	fishTypeCodes    = map[string]uint8{"normal": 0, "golden": 1, "timeIncrease": 2, "timeDecrease": 3}
+	powerUpTypeCodes = map[string]uint8{"none": 0, "fast": 1, "slow": 2, "invert": 3}
 )
 
 type vector struct {
@@ -100,6 +108,8 @@ type gameState struct {
 	PowerUp    powerUpState   `json:"powerUp"`
 	Status     *statusEffect  `json:"statusEffect"`
 	WinnerID   string         `json:"winnerId"`
+	Golden     bool           `json:"goldenChainActive"`
+	TickIndex  uint32         `json:"tickIndex"`
 	ServerTime int64          `json:"serverTime"`
 }
 
@@ -234,6 +244,232 @@ func quantizePlayerForSend(p *playerState) {
 	p.Size = quantizeCoord(p.Size)
 	p.WalkCycle = quantizeWalkCycle(p.WalkCycle)
 	p.StepAccum = roundFloat(p.StepAccum, 3)
+}
+
+type binaryWriter struct {
+	buf bytes.Buffer
+}
+
+func (w *binaryWriter) writeUint8(v uint8) {
+	_ = w.buf.WriteByte(v)
+}
+
+func (w *binaryWriter) writeBool(v bool) {
+	if v {
+		w.writeUint8(1)
+		return
+	}
+	w.writeUint8(0)
+}
+
+func (w *binaryWriter) writeInt16(v int16) {
+	_ = binary.Write(&w.buf, binary.BigEndian, v)
+}
+
+func (w *binaryWriter) writeUint16(v uint16) {
+	_ = binary.Write(&w.buf, binary.BigEndian, v)
+}
+
+func (w *binaryWriter) writeUint32(v uint32) {
+	_ = binary.Write(&w.buf, binary.BigEndian, v)
+}
+
+func (w *binaryWriter) writeFloat32(v float32) {
+	_ = binary.Write(&w.buf, binary.BigEndian, v)
+}
+
+func (w *binaryWriter) writeString(v string) {
+	bytesValue := []byte(v)
+	if len(bytesValue) > math.MaxUint16 {
+		bytesValue = bytesValue[:math.MaxUint16]
+	}
+	w.writeUint16(uint16(len(bytesValue)))
+	_, _ = w.buf.Write(bytesValue)
+}
+
+func (w *binaryWriter) bytes() []byte {
+	return w.buf.Bytes()
+}
+
+type binaryReader struct {
+	data   []byte
+	offset int
+}
+
+func (r *binaryReader) readUint8() (uint8, error) {
+	if r.offset+1 > len(r.data) {
+		return 0, fmt.Errorf("out of bounds")
+	}
+	value := r.data[r.offset]
+	r.offset++
+	return value, nil
+}
+
+func (r *binaryReader) readInt16() (int16, error) {
+	if r.offset+2 > len(r.data) {
+		return 0, fmt.Errorf("out of bounds")
+	}
+	value := int16(binary.BigEndian.Uint16(r.data[r.offset:]))
+	r.offset += 2
+	return value, nil
+}
+
+func (r *binaryReader) readUint16() (uint16, error) {
+	if r.offset+2 > len(r.data) {
+		return 0, fmt.Errorf("out of bounds")
+	}
+	value := binary.BigEndian.Uint16(r.data[r.offset:])
+	r.offset += 2
+	return value, nil
+}
+
+func (r *binaryReader) readFloat32() (float32, error) {
+	if r.offset+4 > len(r.data) {
+		return 0, fmt.Errorf("out of bounds")
+	}
+	bits := binary.BigEndian.Uint32(r.data[r.offset:])
+	r.offset += 4
+	return math.Float32frombits(bits), nil
+}
+
+func (r *binaryReader) readString() (string, error) {
+	length, err := r.readUint16()
+	if err != nil {
+		return "", err
+	}
+	if r.offset+int(length) > len(r.data) {
+		return "", fmt.Errorf("out of bounds")
+	}
+	value := string(r.data[r.offset : r.offset+int(length)])
+	r.offset += int(length)
+	return value, nil
+}
+
+func (r *binaryReader) readFloatVector() (*vector, error) {
+	x, err := r.readFloat32()
+	if err != nil {
+		return nil, err
+	}
+	y, err := r.readFloat32()
+	if err != nil {
+		return nil, err
+	}
+	return &vector{X: float64(x), Y: float64(y)}, nil
+}
+
+func decodeInputBuffer(data []byte) (*string, *vector) {
+	reader := &binaryReader{data: data}
+	playerID, err := reader.readString()
+	if err != nil {
+		return nil, nil
+	}
+	vec, err := reader.readFloatVector()
+	if err != nil {
+		return nil, nil
+	}
+	return &playerID, vec
+}
+
+func encodeWallsBinary(walls []wall, writer *binaryWriter) {
+	count := len(walls)
+	if count > 1024 {
+		count = 1024
+	}
+	writer.writeUint16(uint16(count))
+	for i := 0; i < count; i++ {
+		writer.writeFloat32(float32(walls[i].X))
+		writer.writeFloat32(float32(walls[i].Y))
+		writer.writeFloat32(float32(walls[i].Width))
+		writer.writeFloat32(float32(walls[i].Height))
+	}
+}
+
+func encodeMinesBinary(mines []mine, writer *binaryWriter) {
+	count := len(mines)
+	if count > 32 {
+		count = 32
+	}
+	writer.writeUint8(uint8(count))
+	for i := 0; i < count; i++ {
+		writer.writeFloat32(float32(mines[i].X))
+		writer.writeFloat32(float32(mines[i].Y))
+		writer.writeFloat32(float32(mines[i].Size))
+	}
+}
+
+func encodePlayersBinary(players []*playerState, writer *binaryWriter) {
+	count := len(players)
+	if count > 32 {
+		count = 32
+	}
+	writer.writeUint8(uint8(count))
+	for i := 0; i < count; i++ {
+		p := players[i]
+		writer.writeString(p.ID)
+		writer.writeString(p.Name)
+		writer.writeUint32(uint32(p.Score))
+		writer.writeBool(p.Ready)
+		writer.writeBool(p.Alive)
+		writer.writeFloat32(float32(p.X))
+		writer.writeFloat32(float32(p.Y))
+		writer.writeFloat32(float32(p.Size))
+		writer.writeInt16(int16(p.Facing))
+		writer.writeBool(p.Moving)
+		writer.writeFloat32(float32(p.WalkCycle))
+		writer.writeFloat32(float32(p.StepAccum))
+
+		appearance := p.AppearanceJSON
+		if appearance == "" && len(p.Appearance) > 0 {
+			if payload, err := json.Marshal(p.Appearance); err == nil {
+				appearance = string(payload)
+			}
+		}
+		if len(appearance) > 300 {
+			appearance = appearance[:300]
+		}
+		writer.writeString(appearance)
+	}
+}
+
+func encodeStateBinary(state gameState) []byte {
+	writer := &binaryWriter{}
+	writer.writeUint32(uint32(state.ServerTime))
+	writer.writeUint32(state.TickIndex)
+	writer.writeString(state.RoomName)
+	writer.writeUint8(phaseCodes[state.Phase])
+	writer.writeFloat32(float32(state.Countdown))
+	writer.writeFloat32(float32(state.Remaining))
+	writer.writeBool(state.Golden)
+	writer.writeString(state.WinnerID)
+	writer.writeString(state.Message)
+
+	statusType := ""
+	statusRemaining := float32(0)
+	if state.Status != nil {
+		statusType = state.Status.Type
+		statusRemaining = float32(state.Status.Remaining)
+	}
+	writer.writeString(statusType)
+	writer.writeFloat32(statusRemaining)
+
+	writer.writeUint8(fishTypeCodes[state.Fish.Type])
+	writer.writeFloat32(float32(state.Fish.X))
+	writer.writeFloat32(float32(state.Fish.Y))
+	writer.writeFloat32(float32(state.Fish.Size))
+	writer.writeBool(state.Fish.Alive)
+	writer.writeInt16(int16(state.Fish.Direction))
+
+	writer.writeBool(state.PowerUp.Active)
+	writer.writeFloat32(float32(state.PowerUp.X))
+	writer.writeFloat32(float32(state.PowerUp.Y))
+	writer.writeFloat32(float32(state.PowerUp.Size))
+	writer.writeFloat32(float32(state.PowerUp.Remaining))
+	writer.writeUint8(powerUpTypeCodes["none"])
+
+	encodeWallsBinary(state.Walls, writer)
+	encodeMinesBinary(state.Mines, writer)
+	encodePlayersBinary(state.Players, writer)
+	return writer.bytes()
 }
 
 func quantizeStateForSend(state *gameState) {
@@ -468,16 +704,15 @@ func buildStatePatch(previous, current gameState) *statePatch {
 }
 
 type room struct {
-	name              string
-	players           map[string]*playerState
-	inputs            map[string]vector
-	connections       map[*websocket.Conn]string
-	state             gameState
-	server            *server
-	mu                sync.Mutex
-	cancel            chan struct{}
-	lastBroadcast     *gameState
-	lastFullBroadcast time.Time
+	name        string
+	players     map[string]*playerState
+	inputs      map[string]vector
+	connections map[*websocket.Conn]string
+	state       gameState
+	server      *server
+	mu          sync.Mutex
+	cancel      chan struct{}
+	tickIndex   uint32
 }
 
 type server struct {
@@ -722,9 +957,17 @@ func (r *room) handleConnection(conn *websocket.Conn, playerID, playerName strin
 			r.dropConnection(conn)
 		}()
 		for {
-			_, data, err := conn.ReadMessage()
+			messageType, data, err := conn.ReadMessage()
 			if err != nil {
 				return
+			}
+			if messageType == websocket.BinaryMessage {
+				if pid, vec := decodeInputBuffer(data); pid != nil && vec != nil {
+					r.mu.Lock()
+					r.inputs[*pid] = *vec
+					r.mu.Unlock()
+				}
+				continue
 			}
 			var msg wsMessage
 			if err := json.Unmarshal(data, &msg); err != nil {
@@ -812,9 +1055,10 @@ func (r *room) sendFullState(conn *websocket.Conn) {
 	r.mu.Lock()
 	stateCopy := r.snapshotLocked()
 	r.mu.Unlock()
-
-	data, _ := json.Marshal(wsMessage{Type: "state", State: &stateCopy})
-	conn.WriteMessage(websocket.TextMessage, data)
+	stateCopy.TickIndex = r.tickIndex
+	quantizeStateForSend(&stateCopy)
+	data := encodeStateBinary(stateCopy)
+	conn.WriteMessage(websocket.BinaryMessage, data)
 }
 
 func (r *room) run() {
@@ -840,6 +1084,8 @@ func (r *room) step() {
 
 	now := time.Now()
 	r.state.ServerTime = now.UnixMilli()
+	r.state.TickIndex = r.tickIndex
+	r.tickIndex++
 	switch r.state.Phase {
 	case "countdown":
 		r.state.Countdown -= tickRate.Seconds()
@@ -1083,38 +1329,16 @@ func (r *room) broadcastState() {
 	r.mu.Lock()
 	stateCopy := r.snapshotLocked()
 	quantizeStateForSend(&stateCopy)
-	previous := r.lastBroadcast
-	lastFull := r.lastFullBroadcast
+	stateCopy.TickIndex = r.tickIndex
 	connections := make([]*websocket.Conn, 0, len(r.connections))
 	for conn := range r.connections {
 		connections = append(connections, conn)
 	}
 	r.mu.Unlock()
 
-	shouldSendFull := previous == nil || time.Since(lastFull) > 3*time.Second
-	var data []byte
-	if shouldSendFull {
-		data, _ = json.Marshal(wsMessage{Type: "state", State: &stateCopy, Full: true})
-	} else {
-		patch := buildStatePatch(*previous, stateCopy)
-		if patch == nil || patch.isEmpty() {
-			r.mu.Lock()
-			r.lastBroadcast = &stateCopy
-			r.mu.Unlock()
-			return
-		}
-		data, _ = json.Marshal(wsMessage{Type: "state", Patch: patch})
-	}
-
-	r.mu.Lock()
-	r.lastBroadcast = &stateCopy
-	if shouldSendFull {
-		r.lastFullBroadcast = time.Now()
-	}
-	r.mu.Unlock()
-
+	data := encodeStateBinary(stateCopy)
 	for _, conn := range connections {
-		conn.WriteMessage(websocket.TextMessage, data)
+		conn.WriteMessage(websocket.BinaryMessage, data)
 	}
 }
 
