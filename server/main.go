@@ -94,6 +94,7 @@ type fishState struct {
 	Y         float64 `json:"y"`
 	Size      float64 `json:"size"`
 	Alive     bool    `json:"alive"`
+	Spawned   bool    `json:"spawned,omitempty"`
 	Type      string  `json:"type"`
 	Direction int     `json:"direction"`
 }
@@ -457,6 +458,7 @@ func encodeStateBinary(state gameState) []byte {
 	writer.writeFloat32(float32(state.Fish.Y))
 	writer.writeFloat32(float32(state.Fish.Size))
 	writer.writeBool(state.Fish.Alive)
+	writer.writeBool(state.Fish.Spawned)
 	writer.writeInt16(int16(state.Fish.Direction))
 
 	writer.writeBool(state.PowerUp.Active)
@@ -643,6 +645,7 @@ func encodePatchBinary(patch *statePatch, tickIndex uint32) []byte {
 		writer.writeFloat32(float32(patch.Fish.Y))
 		writer.writeFloat32(float32(patch.Fish.Size))
 		writer.writeBool(patch.Fish.Alive)
+		writer.writeBool(patch.Fish.Spawned)
 		writer.writeInt16(int16(patch.Fish.Direction))
 	}
 	if patch.PowerUp != nil {
@@ -729,7 +732,7 @@ func statusEqual(a, b *statusEffect) bool {
 }
 
 func fishEqual(a, b fishState) bool {
-	return !floatChanged(a.X, b.X) && !floatChanged(a.Y, b.Y) && !floatChanged(a.Size, b.Size) && a.Alive == b.Alive && a.Type == b.Type && a.Direction == b.Direction
+	return !floatChanged(a.X, b.X) && !floatChanged(a.Y, b.Y) && !floatChanged(a.Size, b.Size) && a.Alive == b.Alive && a.Type == b.Type && a.Direction == b.Direction && a.Spawned == b.Spawned
 }
 
 func powerUpEqual(a, b powerUpState) bool {
@@ -1537,6 +1540,7 @@ func (r *room) spawnFishLocked() {
 		fish.Size = fishSize
 		fish.Type = "normal"
 		fish.Direction = 1
+		fish.Spawned = true
 		r.state.Mines = r.generateMinesLocked()
 		r.refreshPowerUpLocked()
 		placed = true
@@ -1553,6 +1557,7 @@ func (r *room) spawnFishLocked() {
 		fish.Size = fishSize
 		fish.Type = "normal"
 		fish.Direction = 1
+		fish.Spawned = true
 		r.state.Mines = r.generateMinesLocked()
 		r.refreshPowerUpLocked()
 	}
@@ -1591,7 +1596,9 @@ func (r *room) broadcastState() {
 		connections = append(connections, conn)
 	}
 	stateSnapshot := stateCopy
+	stateSnapshot.Fish.Spawned = false
 	r.lastBroadcastState = &stateSnapshot
+	r.state.Fish.Spawned = false
 	r.mu.Unlock()
 
 	var data []byte
