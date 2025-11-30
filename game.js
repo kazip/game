@@ -1,12 +1,3 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./supabase-config.js";
-import { MultiplayerServer } from "./multiplayer-server.js";
-import {
-  decodeInputFromBase64,
-  decodeStateFromBase64,
-  encodeInputToBase64
-} from "./multiplayer-binary.js";
-
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
@@ -222,20 +213,16 @@ const JOYSTICK_DEADZONE = 0.22;
 let joystickPointerId = null;
 const joystickVector = { x: 0, y: 0 };
 
-const sanitizedSupabaseUrl =
-  typeof SUPABASE_URL === "string" ? SUPABASE_URL.trim() : "";
-const sanitizedSupabaseKey =
-  typeof SUPABASE_ANON_KEY === "string" ? SUPABASE_ANON_KEY.trim() : "";
-const supabaseConfigured =
-  sanitizedSupabaseUrl &&
-  sanitizedSupabaseKey &&
-  sanitizedSupabaseUrl !== "https://your-project-ref.supabase.co" &&
-  sanitizedSupabaseKey !== "public-anon-key";
-const supabaseClient = supabaseConfigured
-  ? createClient(sanitizedSupabaseUrl, sanitizedSupabaseKey)
-  : null;
+window.CAT_SERVER_URL = 'http://188.120.224.193:8080'
+
+const API_BASE_URL =
+  typeof window !== "undefined" && window.CAT_SERVER_URL
+    ? window.CAT_SERVER_URL
+    : window.location.origin;
+const WS_BASE_URL = API_BASE_URL.replace(/^http/, "ws");
 let multiplayerLobby = null;
 
+const PLAYER_ID_STORAGE_KEY = "cat-game:player-id";
 const PLAYER_NAME_STORAGE_KEY = "cat-game:player-name";
 const SOUND_ENABLED_STORAGE_KEY = "cat-game:sound-enabled";
 const MUSIC_ENABLED_STORAGE_KEY = "cat-game:music-enabled";
@@ -246,6 +233,41 @@ const scoreboardState = {
   hasSavedCurrentScore: false,
   isSaving: false
 };
+
+function getOrCreatePlayerId() {
+  try {
+    const existing = window.localStorage.getItem(PLAYER_ID_STORAGE_KEY);
+    if (existing) {
+      return existing;
+    }
+    const generated = crypto.randomUUID();
+    window.localStorage.setItem(PLAYER_ID_STORAGE_KEY, generated);
+    return generated;
+  } catch (error) {
+    return crypto.randomUUID();
+  }
+}
+
+const playerId = getOrCreatePlayerId();
+
+async function apiRequest(path, { method = "GET", body = null } = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : null
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Запрос завершился с ошибкой ${response.status}`);
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  return response.json();
+}
 
 updateStatusEffectIndicator();
 
@@ -334,6 +356,34 @@ function loadCatAppearanceFromStorage() {
   return sanitizeAppearance(stored);
 }
 
+async function loadCatAppearanceFromServer() {
+  try {
+    const data = await apiRequest(`/api/cats/${encodeURIComponent(playerId)}`);
+    if (data?.appearance) {
+      const appearance = sanitizeAppearance(data.appearance);
+      cat.appearance = appearance;
+      safeStoreObject(CAT_APPEARANCE_STORAGE_KEY, appearance);
+      applyAppearanceToInputs(appearance);
+      renderCatPreview();
+    }
+  } catch (error) {
+    console.warn("Не удалось загрузить внешний облик кота", error);
+  }
+}
+
+function saveCatAppearanceToServer(appearance) {
+  const payload = {
+    playerId,
+    name: playerNameInput?.value?.trim() || "Игрок",
+    appearance
+  };
+  apiRequest(`/api/cats/${encodeURIComponent(playerId)}`, { method: "POST", body: payload }).catch(
+    (error) => {
+      console.warn("Не удалось сохранить облик кота", error);
+    }
+  );
+}
+
 function applyAppearanceToInputs(appearance) {
   if (!appearance) {
     return;
@@ -392,6 +442,7 @@ function updateCatAppearance(changes = {}) {
   const nextAppearance = sanitizeAppearance({ ...cat.appearance, ...changes });
   cat.appearance = nextAppearance;
   safeStoreObject(CAT_APPEARANCE_STORAGE_KEY, nextAppearance);
+  saveCatAppearanceToServer(nextAppearance);
   applyAppearanceToInputs(nextAppearance);
   renderCatPreview();
   if (gameMode === "multiplayer" && multiplayerManager) {
@@ -402,6 +453,7 @@ function updateCatAppearance(changes = {}) {
 cat.appearance = loadCatAppearanceFromStorage();
 applyAppearanceToInputs(cat.appearance);
 renderCatPreview();
+loadCatAppearanceFromServer();
 
 function setScoreStatus(text = "") {
   if (scoreStatusEl) {
@@ -723,13 +775,11 @@ function updateScoreFormControls() {
   if (!submitScoreForm) {
     return;
   }
-  const supabaseReady = Boolean(supabaseClient);
   if (playerNameInput) {
-    playerNameInput.disabled = !supabaseReady || scoreboardState.isSaving;
+    playerNameInput.disabled = scoreboardState.isSaving;
   }
   if (saveScoreButton) {
     const shouldEnable =
-      supabaseReady &&
       gameOver &&
       !scoreboardState.hasSavedCurrentScore &&
       !scoreboardState.isSaving;
@@ -993,15 +1043,6 @@ function maybeSpawnPowerUp() {
 }
 
 async function fetchLeaderboard() {
-  if (!supabaseClient) {
-    if (leaderboardEl && leaderboardEl.childElementCount === 0) {
-      const item = document.createElement("li");
-      item.textContent = "Supabase не настроен.";
-      leaderboardEl.appendChild(item);
-    }
-    return;
-  }
-
   if (leaderboardEl) {
     leaderboardEl.innerHTML = "";
     const loadingItem = document.createElement("li");
@@ -1010,16 +1051,9 @@ async function fetchLeaderboard() {
   }
 
   try {
-    const { data, error } = await supabaseClient
-      .from("scores")
-      .select("name, score")
-      .order("score", { ascending: false })
-      .order("created_at", { ascending: true })
-      .limit(10);
-    if (error) {
-      throw error;
-    }
-    renderLeaderboard(data || []);
+    const response = await apiRequest("/api/scores");
+    const items = Array.isArray(response?.scores) ? response.scores : response || [];
+    renderLeaderboard(items);
   } catch (error) {
     console.error("Не удалось получить таблицу лидеров", error);
     if (leaderboardEl) {
@@ -1040,18 +1074,8 @@ if (playerNameInput && storedName) {
   playerNameInput.value = storedName;
 }
 
-if (!supabaseClient) {
-  if (leaderboardEl) {
-    leaderboardEl.innerHTML = "";
-    const item = document.createElement("li");
-    item.textContent = "Supabase не настроен.";
-    leaderboardEl.appendChild(item);
-  }
-  setScoreStatus("Укажите Supabase URL и ключ в файле supabase-config.js.");
-} else {
-  setScoreStatus(DEFAULT_SCORE_STATUS);
-  fetchLeaderboard();
-}
+setScoreStatus(DEFAULT_SCORE_STATUS);
+fetchLeaderboard();
 
 updateScoreFormControls();
 
@@ -2060,9 +2084,7 @@ function resetGame() {
     soundManager.startMusic();
   }
   lastTimestamp = performance.now();
-  if (supabaseClient) {
-    setScoreStatus(DEFAULT_SCORE_STATUS);
-  }
+  setScoreStatus(DEFAULT_SCORE_STATUS);
   updateResultsSummary();
   updateScoreFormControls();
   requestAnimationFrame(loop);
@@ -2081,10 +2103,10 @@ function endGame(reason) {
   updateResultsSummary(reason);
   updateScoreFormControls();
   showResultsOverlay();
-  if (supabaseClient && playerNameInput) {
+  if (playerNameInput) {
     playerNameInput.focus();
   }
-  if (supabaseClient && !scoreboardState.hasSavedCurrentScore) {
+  if (!scoreboardState.hasSavedCurrentScore) {
     setScoreStatus("Введите имя и сохраните результат.");
   }
 }
@@ -2715,13 +2737,10 @@ function createMultiplayerServerDependencies() {
 }
 
 class MultiplayerLobby {
-  constructor(client) {
-    this.client = client;
-    this.channel = null;
+  constructor() {
     this.rooms = new Map();
     this.listeners = new Set();
-    this.providers = new Map();
-    this.clientId = generateClientId();
+    this.pollInterval = null;
   }
 
   addListener(listener) {
@@ -2745,374 +2764,140 @@ class MultiplayerLobby {
   }
 
   async connect() {
-    if (this.channel || !this.client) {
+    if (this.pollInterval) {
       return;
     }
-    this.channel = this.client.channel("cat-mp:lobby", {
-      config: { presence: { key: this.clientId } }
-    });
-
-    this.channel.on("broadcast", { event: "room-state" }, ({ payload }) => {
-      this.handleRoomState(payload);
-    });
-    this.channel.on("broadcast", { event: "room-closed" }, ({ payload }) => {
-      this.handleRoomClosed(payload);
-    });
-    this.channel.on("broadcast", { event: "request-sync" }, () => {
-      this.broadcastKnownRooms();
-    });
-
-    const { error } = await this.channel.subscribe((status) => {
-      if (status === "SUBSCRIBED") {
-        this.channel.track({ clientId: this.clientId, connectedAt: Date.now() }).catch(() => {});
-        this.requestSync();
-      }
-    });
-    if (error) {
-      throw error;
-    }
+    await this.requestSync();
+    this.pollInterval = setInterval(() => this.requestSync(), 5000);
   }
 
   async disconnect() {
-    if (this.channel) {
-      try {
-        await this.channel.untrack();
-      } catch (error) {
-        // ignore
-      }
-      try {
-        await this.channel.unsubscribe();
-      } catch (error) {
-        // ignore
-      }
-    }
-    this.channel = null;
-  }
-
-  requestSync() {
-    if (!this.channel) {
-      return;
-    }
-    this.channel.send({ type: "broadcast", event: "request-sync", payload: { requester: this.clientId } });
-  }
-
-  publishRoomState(roomName, state) {
-    if (!this.channel || !roomName || !state) {
-      return;
-    }
-    const entry = {
-      roomName,
-      phase: state.phase || "lobby",
-      playerCount: (state.players || []).length,
-      updatedAt: Date.now()
-    };
-    this.rooms.set(roomName, entry);
-    this.channel.send({ type: "broadcast", event: "room-state", payload: entry });
-    this.notifyListeners();
-  }
-
-  publishRoomClosed(roomName) {
-    if (!this.channel || !roomName) {
-      return;
-    }
-    this.rooms.delete(roomName);
-    this.channel.send({ type: "broadcast", event: "room-closed", payload: { roomName } });
-    this.notifyListeners();
-  }
-
-  handleRoomState(payload) {
-    if (!payload || !payload.roomName) {
-      return;
-    }
-    this.rooms.set(payload.roomName, payload);
-    this.notifyListeners();
-  }
-
-  handleRoomClosed(payload) {
-    if (!payload?.roomName) {
-      return;
-    }
-    this.rooms.delete(payload.roomName);
-    this.notifyListeners();
-  }
-
-  registerActiveRoom(roomName, stateGetter) {
-    if (!roomName || typeof stateGetter !== "function") {
-      return;
-    }
-    this.providers.set(roomName, stateGetter);
-    const state = stateGetter();
-    if (state) {
-      this.publishRoomState(roomName, state);
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
     }
   }
 
-  unregisterActiveRoom(roomName, { broadcast = true } = {}) {
-    if (!roomName) {
-      return;
-    }
-    this.providers.delete(roomName);
-    if (broadcast) {
-      this.publishRoomClosed(roomName);
+  async requestSync() {
+    try {
+      const response = await apiRequest("/api/rooms");
+      const rooms = Array.isArray(response?.rooms) ? response.rooms : response || [];
+      this.rooms.clear();
+      rooms.forEach((room) => {
+        if (room?.roomName) {
+          this.rooms.set(room.roomName, room);
+        }
+      });
+      this.notifyListeners();
+    } catch (error) {
+      console.warn("Не удалось обновить список комнат", error);
     }
   }
 
-  broadcastKnownRooms() {
-    this.providers.forEach((getter, roomName) => {
-      const state = getter();
-      if (state) {
-        this.publishRoomState(roomName, state);
-      }
-    });
-  }
+  registerActiveRoom() {}
+
+  unregisterActiveRoom() {}
 }
 
 class MultiplayerManager {
   constructor(lobby) {
-    this.playerId = generateClientId();
+    this.playerId = playerId;
     this.playerName = "";
     this.roomName = "";
-    this.channel = null;
-    this.isHost = false;
-    this.server = null;
+    this.socket = null;
     this.state = null;
     this.ready = false;
     this.inputVector = { x: 0, y: 0 };
     this.lastInputSentAt = 0;
     this.rendering = false;
-    this.presenceMeta = null;
-    this.cachedPresence = null;
     this.renderFrameBound = (timestamp) => this.renderFrame(timestamp);
     this.chatMessages = [];
     this.lobby = lobby;
     this.lastLocalStepAccumulator = 0;
-    this.pendingLocalStateTimeout = null;
-  }
-
-  sendPresenceUpdate(meta) {
-    if (!this.channel || !meta) {
-      return Promise.resolve();
-    }
-    const updateFn =
-      typeof this.channel.updatePresence === "function"
-        ? this.channel.updatePresence.bind(this.channel)
-        : typeof this.channel.update === "function"
-        ? this.channel.update.bind(this.channel)
-        : typeof this.channel.track === "function"
-        ? this.channel.track.bind(this.channel)
-        : null;
-    if (!updateFn) {
-      return Promise.resolve();
-    }
-    try {
-      const result = updateFn(meta);
-      return result && typeof result.then === "function"
-        ? result
-        : Promise.resolve(result);
-    } catch (error) {
-      return Promise.reject(error);
-    }
   }
 
   async join(roomName, playerName) {
-    if (!supabaseClient) {
-      throw new Error("Supabase не настроен");
-    }
     this.roomName = roomName;
     this.playerName = playerName;
+    this.ready = false;
     this.resetChat();
-    this.presenceMeta = {
+
+    const params = new URLSearchParams({
+      room: roomName,
       playerId: this.playerId,
-      name: this.playerName,
-      joinedAt: Date.now(),
-      isHost: false,
-      ready: false,
-      appearance: sanitizeAppearance(cat.appearance)
-    };
-    this.channel = supabaseClient.channel(`cat-mp:${roomName}`, {
-      config: { presence: { key: this.playerId } }
+      name: playerName
     });
-    this.setupChannelHandlers();
-    const { error: subscribeError } = await this.channel.subscribe();
-    if (subscribeError) {
-      throw subscribeError;
-    }
-    await this.channel.track(this.presenceMeta);
-    this.updateReadyButton();
-    this.updateLobbyUI();
+    const socketUrl = `${WS_BASE_URL}/ws?${params.toString()}`;
+    await this.leave();
+
+    this.socket = new WebSocket(socketUrl);
+    this.socket.addEventListener("open", () => {
+      this.sendMessage({ type: "appearance", appearance: sanitizeAppearance(cat.appearance) });
+      this.sendMessage({ type: "ready", ready: this.ready });
+      this.updateReadyButton();
+    });
+    this.socket.addEventListener("message", (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        this.handleSocketMessage(payload);
+      } catch (error) {
+        console.warn("Ошибка обработки сообщения сервера", error);
+      }
+    });
+    this.socket.addEventListener("close", () => {
+      this.socket = null;
+      this.updateReadyButton();
+      this.updateHud();
+    });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Подключение заняло слишком много времени")), 4000);
+      const handleOpen = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const handleError = () => {
+        clearTimeout(timer);
+        reject(new Error("Не удалось подключиться к серверу"));
+      };
+      this.socket?.addEventListener("open", handleOpen, { once: true });
+      this.socket?.addEventListener("error", handleError, { once: true });
+    });
   }
 
   async leave() {
-    const wasHost = this.isHost;
     this.stopRenderLoop();
-    if (this.server) {
-      this.server.destroy();
-      this.server = null;
+    if (this.socket) {
+      this.socket.close();
     }
-    if (this.pendingLocalStateTimeout) {
-      clearTimeout(this.pendingLocalStateTimeout);
-      this.pendingLocalStateTimeout = null;
-    }
-    if (this.channel) {
-      try {
-        await this.channel.untrack();
-      } catch (error) {
-        // ignore
-      }
-      try {
-        await this.channel.unsubscribe();
-      } catch (error) {
-        // ignore
-      }
-    }
-    this.channel = null;
+    this.socket = null;
     this.state = null;
-    this.isHost = false;
     this.ready = false;
-    this.cachedPresence = null;
-    this.resetChat();
-    if (wasHost && this.lobby) {
-      this.lobby.unregisterActiveRoom(this.roomName);
-    }
     this.updateReadyButton();
     this.updateHud();
   }
 
-  setupChannelHandlers() {
-    if (!this.channel) {
+  sendMessage(payload) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
-    this.channel.on("broadcast", { event: "server-state" }, ({ payload }) => {
-      const decoded = decodeStateFromBase64(payload);
-      if (decoded) {
-        this.handleServerState(decoded);
-      }
-    });
-    this.channel.on("broadcast", { event: "player-ready" }, ({ payload }) => {
-      if (this.isHost && this.server) {
-        this.server.handlePlayerReady(payload.playerId, payload.ready);
-      }
-    });
-    this.channel.on("broadcast", { event: "player-input" }, ({ payload }) => {
-      const decoded = decodeInputFromBase64(payload);
-      if (decoded && this.isHost && this.server) {
-        this.server.handlePlayerInput(decoded.playerId, decoded.vector);
-      }
-    });
-    this.channel.on("broadcast", { event: "player-appearance" }, ({ payload }) => {
-      if (this.isHost && this.server) {
-        this.server.handlePlayerAppearance(payload.playerId, payload.appearance);
-      }
-    });
-    this.channel.on("broadcast", { event: "chat-message" }, ({ payload }) => {
-      this.handleChatMessage(payload);
-    });
-    this.channel.on("presence", { event: "sync" }, () => {
-      this.handlePresenceSync();
-    });
+    this.socket.send(JSON.stringify(payload));
   }
 
-  handlePresenceSync() {
-    if (!this.channel) {
-      return;
-    }
-    const presence = this.channel.presenceState();
-    this.cachedPresence = presence;
-    const entries = [];
-    Object.values(presence || {}).forEach((states) => {
-      states.forEach((meta) => {
-        if (meta && meta.playerId) {
-          entries.push(meta);
+  handleSocketMessage(message) {
+    switch (message?.type) {
+      case "state":
+        this.handleServerState(message.state || message);
+        break;
+      case "chat":
+        this.handleChatMessage(message.message || message);
+        break;
+      case "error":
+        if (multiplayerErrorEl) {
+          multiplayerErrorEl.textContent = message.message || "Не удалось подключиться.";
         }
-      });
-    });
-    entries.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
-    const currentHost = entries.find((entry) => entry.isHost);
-    if (!currentHost && entries.length > 0) {
-      const first = entries[0];
-      if (first && first.playerId === this.playerId) {
-        this.becomeHost();
-      }
-    } else if (currentHost && currentHost.playerId === this.playerId) {
-      this.startHosting();
-    } else if (this.isHost && currentHost && currentHost.playerId !== this.playerId) {
-      this.stopHosting();
-    }
-
-    if (this.isHost && this.server) {
-      this.server.syncPresence(presence);
-      this.server.startTicking();
-    }
-
-    this.updateLobbyUI();
-  }
-
-  async becomeHost() {
-    if (this.isHost || !this.channel) {
-      return;
-    }
-    this.isHost = true;
-    this.presenceMeta = { ...this.presenceMeta, isHost: true };
-    try {
-      await this.sendPresenceUpdate(this.presenceMeta);
-    } catch (error) {
-      // ignore
-    }
-    this.startHosting();
-  }
-
-  startHosting() {
-    if (this.server || !this.channel) {
-      return;
-    }
-    this.server = new MultiplayerServer(this, createMultiplayerServerDependencies());
-    this.server.syncPresence(this.channel.presenceState());
-    this.server.startTicking();
-    if (this.lobby) {
-      this.lobby.registerActiveRoom(this.roomName, () => this.state);
-    }
-  }
-
-  stopHosting() {
-    if (!this.isHost) {
-      return;
-    }
-    this.isHost = false;
-    if (this.lobby) {
-      this.lobby.unregisterActiveRoom(this.roomName, { broadcast: false });
-    }
-    if (this.server) {
-      this.server.destroy();
-      this.server = null;
-    }
-    if (this.channel && this.presenceMeta) {
-      this.presenceMeta = { ...this.presenceMeta, isHost: false };
-      this.sendPresenceUpdate(this.presenceMeta).catch(() => {});
-    }
-  }
-
-  broadcastState(encodedState, decodedState) {
-    if (!this.channel || !encodedState) {
-      return;
-    }
-    this.channel.send({
-      type: "broadcast",
-      event: "server-state",
-      payload: { binary: encodedState }
-    });
-    if (this.lobby && this.isHost && decodedState) {
-      this.lobby.publishRoomState(this.roomName, decodedState);
-    }
-    if (this.isHost) {
-      if (this.pendingLocalStateTimeout) {
-        clearTimeout(this.pendingLocalStateTimeout);
-      }
-      this.pendingLocalStateTimeout = setTimeout(() => {
-        const fallback = decodeStateFromBase64(encodedState);
-        if (fallback) {
-          this.handleServerState(fallback);
-        }
-      }, 24);
+        break;
+      default:
+        break;
     }
   }
 
@@ -3121,13 +2906,8 @@ class MultiplayerManager {
     if (!state) {
       return;
     }
-    if (this.pendingLocalStateTimeout) {
-      clearTimeout(this.pendingLocalStateTimeout);
-      this.pendingLocalStateTimeout = null;
-    }
     this.state = state;
     this.handleStateAudio(previousState, state);
-    this.syncReadyFromState(state);
     syncMultiplayerStatusEffect(state.statusEffect);
     if (state.phase === "playing" || state.phase === "countdown") {
       hideMultiplayerOverlay();
@@ -3139,6 +2919,8 @@ class MultiplayerManager {
       showMultiplayerChat(this.roomName);
       showRestartButton();
     }
+    this.ready = Boolean(state.players?.find((player) => player.id === this.playerId)?.ready);
+    this.updateReadyButton();
     this.updateHud();
     this.updateLobbyUI();
     this.ensureRender();
@@ -3187,21 +2969,6 @@ class MultiplayerManager {
     }
   }
 
-  syncReadyFromState(state) {
-    if (!state || !Array.isArray(state.players)) {
-      return;
-    }
-    const self = state.players.find((player) => player.id === this.playerId);
-    if (!self || self.ready === this.ready) {
-      return;
-    }
-    this.ready = self.ready;
-    if (this.presenceMeta) {
-      this.presenceMeta = { ...this.presenceMeta, ready: this.ready };
-    }
-    this.updateReadyButton();
-  }
-
   ensureRender() {
     if (this.rendering) {
       return;
@@ -3242,18 +3009,7 @@ class MultiplayerManager {
   toggleReady() {
     this.ready = !this.ready;
     this.updateReadyButton();
-    if (!this.channel) {
-      return;
-    }
-    if (this.presenceMeta) {
-      this.presenceMeta = { ...this.presenceMeta, ready: this.ready };
-      this.sendPresenceUpdate(this.presenceMeta).catch(() => {});
-    }
-    this.channel.send({
-      type: "broadcast",
-      event: "player-ready",
-      payload: { playerId: this.playerId, ready: this.ready }
-    });
+    this.sendMessage({ type: "ready", ready: this.ready });
   }
 
   updateAppearance(appearance) {
@@ -3261,23 +3017,13 @@ class MultiplayerManager {
       return;
     }
     const sanitized = sanitizeAppearance(appearance);
-    if (this.presenceMeta) {
-      this.presenceMeta = { ...this.presenceMeta, appearance: sanitized };
-    }
-    if (this.channel && this.presenceMeta) {
-      this.sendPresenceUpdate(this.presenceMeta).catch(() => {});
-      this.channel.send({
-        type: "broadcast",
-        event: "player-appearance",
-        payload: { playerId: this.playerId, appearance: sanitized }
-      });
-    }
+    this.sendMessage({ type: "appearance", appearance: sanitized });
   }
 
   updateReadyButton() {
     if (multiplayerReadyBtn) {
       multiplayerReadyBtn.textContent = this.ready ? "Не готов" : "Готов";
-      multiplayerReadyBtn.disabled = !this.channel;
+      multiplayerReadyBtn.disabled = !this.socket || this.socket.readyState !== WebSocket.OPEN;
     }
   }
 
@@ -3304,9 +3050,6 @@ class MultiplayerManager {
   }
 
   sendChatMessage(text) {
-    if (!this.channel) {
-      return;
-    }
     const trimmed = text.trim();
     if (!trimmed) {
       return;
@@ -3317,20 +3060,12 @@ class MultiplayerManager {
       text: trimmed.slice(0, 240),
       at: Date.now()
     };
-    this.channel.send({ type: "broadcast", event: "chat-message", payload });
     this.handleChatMessage(payload);
+    this.sendMessage({ type: "chat", message: payload });
   }
 
   sendInput(vector) {
-    if (!this.channel) {
-      return;
-    }
-    const payload = encodeInputToBase64(this.playerId, vector);
-    this.channel.send({
-      type: "broadcast",
-      event: "player-input",
-      payload: { binary: payload }
-    });
+    this.sendMessage({ type: "input", playerId: this.playerId, vector });
   }
 
   updateInputFromControls() {
@@ -3354,18 +3089,12 @@ class MultiplayerManager {
     if (multiplayerRoomLabel) {
       multiplayerRoomLabel.textContent = this.roomName;
     }
-    const players = this.state?.players || this.collectPresencePlayers();
+    const players = this.state?.players || [];
     if (multiplayerPlayerList) {
       multiplayerPlayerList.innerHTML = "";
       players.forEach((player) => {
+        const statusText = player.ready ? "Готов" : "Не готов";
         const item = document.createElement("li");
-        const statusText = this.state
-          ? player.ready
-            ? "Готов"
-            : "Не готов"
-          : player.ready
-          ? "Готов"
-          : "Не готов";
         item.innerHTML = `<span>${escapeHtml(player.name)}</span><span>${statusText}</span>`;
         multiplayerPlayerList.appendChild(item);
       });
@@ -3385,25 +3114,6 @@ class MultiplayerManager {
       }
       multiplayerStatusEl.textContent = message;
     }
-  }
-
-  collectPresencePlayers() {
-    const players = [];
-    if (!this.cachedPresence) {
-      return players;
-    }
-    Object.values(this.cachedPresence).forEach((states) => {
-      states.forEach((meta) => {
-        if (meta && meta.playerId) {
-          players.push({
-            id: meta.playerId,
-            name: meta.name || "Игрок",
-            ready: Boolean(meta.ready)
-          });
-        }
-      });
-    });
-    return players;
   }
 
   updateHud() {
@@ -3465,10 +3175,8 @@ class MultiplayerManager {
   }
 }
 
-if (supabaseClient) {
-  multiplayerLobby = new MultiplayerLobby(supabaseClient);
-  multiplayerLobby.addListener(() => renderMultiplayerRoomList());
-}
+multiplayerLobby = new MultiplayerLobby();
+multiplayerLobby.addListener(() => renderMultiplayerRoomList());
 
 
 function loop(timestamp) {
@@ -3714,10 +3422,6 @@ if (multiplayerJoinForm) {
     if (multiplayerJoinInProgress) {
       return;
     }
-    if (!supabaseClient) {
-      multiplayerErrorEl.textContent = "Supabase не настроен.";
-      return;
-    }
     const rawName = multiplayerNameInput ? multiplayerNameInput.value.trim() : "";
     const rawRoom = multiplayerRoomInput ? multiplayerRoomInput.value.trim() : "";
     if (!rawName) {
@@ -3800,10 +3504,6 @@ if (multiplayerChatForm) {
 if (submitScoreForm) {
   submitScoreForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!supabaseClient) {
-      return;
-    }
-
     if (!gameOver) {
       setScoreStatus("Завершите игру, чтобы сохранить результат.");
       return;
@@ -3830,11 +3530,8 @@ if (submitScoreForm) {
 
     try {
       const safeScore = Math.max(0, Math.floor(score));
-      const payload = { name: normalizedName, score: safeScore };
-      const { error } = await supabaseClient.from("scores").insert(payload);
-      if (error) {
-        throw error;
-      }
+      const payload = { name: normalizedName, score: safeScore, playerId };
+      await apiRequest("/api/scores", { method: "POST", body: payload });
       scoreboardState.hasSavedCurrentScore = true;
       setScoreStatus("Результат сохранён!");
       safeStoreName(normalizedName);
