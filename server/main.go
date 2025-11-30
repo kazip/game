@@ -205,6 +205,72 @@ func floatPtr(v float64) *float64 { return &v }
 
 func intPtr(v int) *int { return &v }
 
+func roundFloat(v float64, decimals int) float64 {
+	factor := math.Pow10(decimals)
+	return math.Round(v*factor) / factor
+}
+
+func quantizeCoord(v float64) float64 {
+	return math.Round(v)
+}
+
+func quantizeWalkCycle(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return roundFloat(v*65535, 0) / 65535
+}
+
+func quantizeSeconds(v float64) float64 {
+	return roundFloat(v, 3)
+}
+
+func quantizePlayerForSend(p *playerState) {
+	p.X = quantizeCoord(p.X)
+	p.Y = quantizeCoord(p.Y)
+	p.Size = quantizeCoord(p.Size)
+	p.WalkCycle = quantizeWalkCycle(p.WalkCycle)
+	p.StepAccum = roundFloat(p.StepAccum, 3)
+}
+
+func quantizeStateForSend(state *gameState) {
+	state.Countdown = quantizeSeconds(state.Countdown)
+	state.Remaining = quantizeSeconds(state.Remaining)
+
+	state.Fish.X = quantizeCoord(state.Fish.X)
+	state.Fish.Y = quantizeCoord(state.Fish.Y)
+	state.Fish.Size = quantizeCoord(state.Fish.Size)
+
+	state.PowerUp.X = quantizeCoord(state.PowerUp.X)
+	state.PowerUp.Y = quantizeCoord(state.PowerUp.Y)
+	state.PowerUp.Size = quantizeCoord(state.PowerUp.Size)
+	state.PowerUp.Remaining = quantizeSeconds(state.PowerUp.Remaining)
+
+	if state.Status != nil {
+		state.Status.Remaining = quantizeSeconds(state.Status.Remaining)
+	}
+
+	for i := range state.Walls {
+		state.Walls[i].X = quantizeCoord(state.Walls[i].X)
+		state.Walls[i].Y = quantizeCoord(state.Walls[i].Y)
+		state.Walls[i].Width = quantizeCoord(state.Walls[i].Width)
+		state.Walls[i].Height = quantizeCoord(state.Walls[i].Height)
+	}
+
+	for i := range state.Mines {
+		state.Mines[i].X = quantizeCoord(state.Mines[i].X)
+		state.Mines[i].Y = quantizeCoord(state.Mines[i].Y)
+		state.Mines[i].Size = quantizeCoord(state.Mines[i].Size)
+	}
+
+	for _, p := range state.Players {
+		quantizePlayerForSend(p)
+	}
+}
+
 func statusEqual(a, b *statusEffect) bool {
 	if a == nil && b == nil {
 		return true
@@ -1016,6 +1082,7 @@ func (r *room) updateLobbyMessageLocked() {
 func (r *room) broadcastState() {
 	r.mu.Lock()
 	stateCopy := r.snapshotLocked()
+	quantizeStateForSend(&stateCopy)
 	previous := r.lastBroadcast
 	lastFull := r.lastFullBroadcast
 	connections := make([]*websocket.Conn, 0, len(r.connections))
