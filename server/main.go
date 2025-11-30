@@ -291,7 +291,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 func (r *room) handleConnection(conn *websocket.Conn, playerID, playerName string) {
 	r.mu.Lock()
 	r.connections[conn] = playerID
-	player := r.ensurePlayer(playerID, playerName)
+	_ = r.ensurePlayer(playerID, playerName)
 	r.mu.Unlock()
 
 	r.sendFullState(conn)
