@@ -1,3 +1,5 @@
+import { decodeStateFromBase64, encodeInputToBuffer } from "./multiplayer-binary.js";
+
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
@@ -2807,6 +2809,9 @@ function applyMultiplayerStatePatch(previousState, patch) {
   if (patch.serverTime !== undefined) {
     nextState.serverTime = patch.serverTime;
   }
+  if (patch.tickIndex !== undefined) {
+    nextState.tickIndex = patch.tickIndex;
+  }
   if (patch.phase !== undefined) {
     nextState.phase = patch.phase;
   }
@@ -2815,6 +2820,9 @@ function applyMultiplayerStatePatch(previousState, patch) {
   }
   if (patch.remaining !== undefined) {
     nextState.remaining = patch.remaining;
+  }
+  if (patch.goldenChainActive !== undefined) {
+    nextState.goldenChainActive = patch.goldenChainActive;
   }
   if (patch.message !== undefined) {
     nextState.message = patch.message;
@@ -2902,10 +2910,17 @@ class MultiplayerManager {
       this.sendMessage({ type: "ready", ready: this.ready });
       this.updateReadyButton();
     });
-    this.socket.addEventListener("message", (event) => {
+    this.socket.addEventListener("message", async (event) => {
       try {
-        const payload = JSON.parse(event.data);
-        this.handleSocketMessage(payload);
+        if (typeof event.data === "string") {
+          const payload = JSON.parse(event.data);
+          this.handleSocketMessage(payload);
+        } else if (event.data instanceof Blob) {
+          const buffer = await event.data.arrayBuffer();
+          this.handleBinaryMessage(buffer);
+        } else if (event.data instanceof ArrayBuffer) {
+          this.handleBinaryMessage(event.data);
+        }
       } catch (error) {
         console.warn("Ошибка обработки сообщения сервера", error);
       }
@@ -2949,6 +2964,13 @@ class MultiplayerManager {
     this.socket.send(JSON.stringify(payload));
   }
 
+  sendBinary(buffer) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !buffer) {
+      return;
+    }
+    this.socket.send(buffer);
+  }
+
   handleSocketMessage(message) {
     switch (message?.type) {
       case "state":
@@ -2964,6 +2986,16 @@ class MultiplayerManager {
         break;
       default:
         break;
+    }
+  }
+
+  handleBinaryMessage(buffer) {
+    if (!buffer) {
+      return;
+    }
+    const payload = decodeStateFromBase64(buffer);
+    if (payload?.state || payload?.patch) {
+      this.handleServerState(payload);
     }
   }
 
@@ -3142,7 +3174,7 @@ class MultiplayerManager {
   }
 
   sendInput(vector) {
-    this.sendMessage({ type: "input", playerId: this.playerId, vector });
+    this.sendBinary(encodeInputToBuffer(this.playerId, vector));
   }
 
   updateInputFromControls() {
