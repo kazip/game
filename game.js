@@ -14,6 +14,13 @@ const WALL_THICKNESS = GRID_CELL_SIZE * 0.6;
 const MAX_WALL_TOTAL_LENGTH = 10;
 const gameContainer = document.querySelector(".game-container");
 
+const bombPassBackground = new Image();
+let bombPassBackgroundReady = false;
+bombPassBackground.onload = () => {
+  bombPassBackgroundReady = true;
+};
+bombPassBackground.src = "assets/bomb-pass-bg.svg";
+
 const DEFAULT_CAT_APPEARANCE = {
   baseColor: "#ffb347",
   bellyColor: "#ffd59c",
@@ -2704,6 +2711,16 @@ function prepareCanvasForFrame(viewSize = getViewportSize()) {
   ctx.clearRect(0, 0, viewSize, viewSize);
 }
 
+function drawBombPassBackground(worldSize) {
+  if (!bombPassBackgroundReady) {
+    return;
+  }
+  ctx.save();
+  ctx.globalAlpha = 0.75;
+  ctx.drawImage(bombPassBackground, 0, 0, worldSize, worldSize);
+  ctx.restore();
+}
+
 function drawWallsCollection(targetWalls) {
   if (!targetWalls || targetWalls.length === 0) {
     return;
@@ -3370,6 +3387,9 @@ class MultiplayerManager {
     }
 
     if (this.state) {
+      if (this.mode === "bomb-pass") {
+        drawBombPassBackground(worldSize);
+      }
       drawWallsCollection(this.state.walls || []);
       drawMinesCollection(this.state.mines || []);
       drawPowerUpSprite(this.state.powerUp);

@@ -355,6 +355,9 @@ type room struct {
 	cancel             chan struct{}
 	tickIndex          uint32
 	bombSlowTimers     map[string]float64
+	lastBombPassFrom   string
+	lastBombPassTo     string
+	lastBombPassAt     time.Time
 }
 
 type server struct {
@@ -822,11 +825,12 @@ func (r *room) beginRoundLocked() {
 	r.state.Mines = nil
 	r.state.PowerUp = powerUpState{Size: powerUpSize}
 	r.bombSlowTimers = make(map[string]float64)
+	r.resetBombPassHistoryLocked()
 	if r.isBombMode() {
 		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
 		r.state.PowerUp.Active = false
 		r.state.Mines = nil
-		r.state.Walls = buildBoundaryWalls(r.currentWorldSize())
+		r.buildBombPassArenaLocked()
 	} else {
 		r.spawnFishLocked()
 	}
@@ -983,6 +987,12 @@ func (r *room) getBombSpeedMultiplierLocked(playerID string) float64 {
 	return 1
 }
 
+func (r *room) resetBombPassHistoryLocked() {
+	r.lastBombPassFrom = ""
+	r.lastBombPassTo = ""
+	r.lastBombPassAt = time.Time{}
+}
+
 func (r *room) resolvePlayerCollisionsLocked() {
 	players := r.alivePlayersLocked()
 	world := r.currentWorldSize()
@@ -1029,6 +1039,7 @@ func (r *room) assignBombToRandomAliveLocked(resetTimer bool) {
 		r.state.BombHolder = ""
 		return
 	}
+	r.resetBombPassHistoryLocked()
 	picked := alive[rand.Intn(len(alive))]
 	r.state.BombHolder = picked.ID
 	if resetTimer {
@@ -1049,9 +1060,21 @@ func (r *room) handleBombTransferLocked() {
 		}
 		dist := math.Hypot(holder.X-p.X, holder.Y-p.Y)
 		if dist <= (holder.Size+p.Size)/2 {
+			recentBackTransfer :=
+				r.lastBombPassFrom != "" &&
+					r.lastBombPassTo != "" &&
+					time.Since(r.lastBombPassAt) < time.Second &&
+					holder.ID == r.lastBombPassTo &&
+					p.ID == r.lastBombPassFrom
+			if recentBackTransfer {
+				continue
+			}
 			r.state.BombHolder = p.ID
 			r.state.BombTimer = math.Max(r.state.BombTimer, 0) + bombTimerBonus
 			r.applyBombSlowdownLocked(p.ID)
+			r.lastBombPassFrom = holder.ID
+			r.lastBombPassTo = p.ID
+			r.lastBombPassAt = time.Now()
 			r.state.Message = fmt.Sprintf("%s передал бомбу %s", fallbackName(holder.Name), fallbackName(p.Name))
 			return
 		}
@@ -1167,6 +1190,7 @@ func (r *room) getSpeedMultiplierLocked() float64 {
 func (r *room) spawnFishLocked() {
 	margin := 30.0
 	fish := &r.state.Fish
+	world := r.currentWorldSize()
 	alivePlayers := make([]*playerState, 0, len(r.players))
 	for _, p := range r.players {
 		if p.Alive {
@@ -1182,15 +1206,14 @@ func (r *room) spawnFishLocked() {
 
 	catCells := make([]gridCell, 0, len(alivePlayers))
 	for _, p := range alivePlayers {
-		catCells = append(catCells, positionToGridCell(p.X, p.Y))
+		catCells = append(catCells, positionToGridCell(p.X, p.Y, world))
 	}
 
 	placed := false
-	world := r.currentWorldSize()
 	for attempt := 0; attempt < 200; attempt++ {
 		x := margin + rand.Float64()*(world-margin*2)
 		y := margin + rand.Float64()*(world-margin*2)
-		fishCell := positionToGridCell(x, y)
+		fishCell := positionToGridCell(x, y, world)
 		if containsCell(catCells, fishCell) {
 			continue
 		}
@@ -1358,6 +1381,38 @@ func (r *room) handlePowerUpAfterWallChangeLocked() {
 	}
 }
 
+func (r *room) buildBombPassArenaLocked() {
+	world := r.currentWorldSize()
+	layout := buildBoundaryWalls(world)
+
+	players := make([]*playerState, 0, len(r.players))
+	for _, p := range r.players {
+		players = append(players, p)
+	}
+	if len(players) == 0 {
+		r.state.Walls = layout
+		return
+	}
+
+	catCells := make([]gridCell, 0, len(players))
+	for _, p := range players {
+		catCells = append(catCells, positionToGridCell(p.X, p.Y, world))
+	}
+
+	anchor := gridCell{Row: gridSize / 2, Col: gridSize / 2}
+	if containsCell(catCells, anchor) {
+		anchor = gridCell{Row: (gridSize / 2) - 1, Col: gridSize / 2}
+	}
+
+	if candidate := r.generateWallsLayoutForPlayers(catCells, anchor); candidate != nil {
+		layout = append(layout, candidate...)
+	}
+
+	r.state.Walls = layout
+	r.handlePowerUpAfterWallChangeLocked()
+	r.resolvePlayersAfterWallChangeLocked()
+}
+
 func (r *room) generateWallsLayoutForPlayers(catCells []gridCell, fishCell gridCell) []wall {
 	if len(catCells) == 0 {
 		return nil
@@ -1378,7 +1433,7 @@ func (r *room) generateWallsLayoutForPlayers(catCells []gridCell, fishCell gridC
 		if !allReachable {
 			continue
 		}
-		candidateWalls := convertSegmentsToWalls(segments)
+		candidateWalls := convertSegmentsToWalls(segments, r.currentWorldSize())
 		intersectsPlayer := false
 		for _, p := range r.players {
 			if entityIntersectsWalls(p, candidateWalls) {
@@ -1529,9 +1584,10 @@ func clampGridIndex(v int) int {
 	return v
 }
 
-func positionToGridCell(x, y float64) gridCell {
-	col := clampGridIndex(int(math.Floor(x / gridCellSize)))
-	row := clampGridIndex(int(math.Floor(y / gridCellSize)))
+func positionToGridCell(x, y, world float64) gridCell {
+	cellSize := world / gridSize
+	col := clampGridIndex(int(math.Floor(x / cellSize)))
+	row := clampGridIndex(int(math.Floor(y / cellSize)))
 	return gridCell{Row: row, Col: col}
 }
 
@@ -1607,22 +1663,24 @@ func isPathAvailable(catCell, fishCell gridCell, blocked [][]bool) bool {
 	return false
 }
 
-func convertSegmentsToWalls(segments []wallSegment) []wall {
+func convertSegmentsToWalls(segments []wallSegment, world float64) []wall {
 	walls := make([]wall, 0, len(segments))
+	cellSize := world / gridSize
+	thickness := cellSize * wallThicknessRate
 	for _, seg := range segments {
 		if seg.Orientation == "horizontal" {
 			walls = append(walls, wall{
-				X:      float64(seg.Col) * gridCellSize,
-				Y:      float64(seg.Row)*gridCellSize + (gridCellSize-wallThickness)/2,
-				Width:  float64(seg.Length) * gridCellSize,
-				Height: wallThickness,
+				X:      float64(seg.Col) * cellSize,
+				Y:      float64(seg.Row)*cellSize + (cellSize-thickness)/2,
+				Width:  float64(seg.Length) * cellSize,
+				Height: thickness,
 			})
 		} else {
 			walls = append(walls, wall{
-				X:      float64(seg.Col)*gridCellSize + (gridCellSize-wallThickness)/2,
-				Y:      float64(seg.Row) * gridCellSize,
-				Width:  wallThickness,
-				Height: float64(seg.Length) * gridCellSize,
+				X:      float64(seg.Col)*cellSize + (cellSize-thickness)/2,
+				Y:      float64(seg.Row) * cellSize,
+				Width:  thickness,
+				Height: float64(seg.Length) * cellSize,
 			})
 		}
 	}
@@ -1630,7 +1688,7 @@ func convertSegmentsToWalls(segments []wallSegment) []wall {
 }
 
 func buildBoundaryWalls(world float64) []wall {
-	thickness := wallThickness
+	thickness := (world / gridSize) * wallThicknessRate
 	return []wall{
 		{X: 0, Y: 0, Width: world, Height: thickness},
 		{X: 0, Y: world - thickness, Width: world, Height: thickness},
