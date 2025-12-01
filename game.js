@@ -178,6 +178,7 @@ const multiplayerOverlay = document.getElementById("multiplayer-overlay");
 const multiplayerJoinForm = document.getElementById("multiplayer-join-form");
 const multiplayerNameInput = document.getElementById("multiplayer-name");
 const multiplayerRoomInput = document.getElementById("multiplayer-room");
+const multiplayerModeSelect = document.getElementById("multiplayer-mode");
 const multiplayerErrorEl = document.getElementById("multiplayer-error");
 const multiplayerCancelBtn = document.getElementById("multiplayer-cancel");
 const multiplayerLobbyCard = document.getElementById("multiplayer-lobby");
@@ -190,6 +191,7 @@ const multiplayerReadyBtn = document.getElementById("multiplayer-ready");
 const multiplayerLeaveBtn = document.getElementById("multiplayer-leave");
 const multiplayerHud = document.getElementById("multiplayer-hud");
 const multiplayerHudRoom = document.getElementById("multiplayer-hud-room");
+const multiplayerHudMode = document.getElementById("multiplayer-hud-mode");
 const multiplayerCountdownEl = document.getElementById("multiplayer-countdown");
 const multiplayerHudPlayers = document.getElementById("multiplayer-hud-players");
 const multiplayerGameMessage = document.getElementById("multiplayer-game-message");
@@ -667,9 +669,10 @@ function renderMultiplayerRoomList() {
     item.classList.toggle("unavailable", !isJoinable);
     const meta = document.createElement("div");
     meta.className = "multiplayer-room-meta";
+    const modeLabel = room.mode === "bomb-pass" ? "Бомба-пас" : "Охота за рыбкой";
     meta.innerHTML = `
       <span class="multiplayer-room-name">${escapeHtml(room.roomName)}</span>
-      <span class="multiplayer-room-status">Игроков: ${room.playerCount} · Статус: ${
+      <span class="multiplayer-room-status">Игроков: ${room.playerCount} · Режим: ${modeLabel} · Статус: ${
         room.phase === "playing" ? "Идёт игра" : room.phase === "countdown" ? "Скоро старт" : "Ожидание"
       }</span>
     `;
@@ -679,6 +682,7 @@ function renderMultiplayerRoomList() {
     joinButton.textContent = isJoinable ? "Подключиться" : "Недоступно";
     joinButton.disabled = !isJoinable;
     joinButton.dataset.roomName = room.roomName;
+    joinButton.dataset.roomMode = room.mode || "classic";
 
     item.appendChild(meta);
     item.appendChild(joinButton);
@@ -734,13 +738,13 @@ async function leaveMultiplayerRoom({ backToMenu = false } = {}) {
   gameMode = backToMenu ? "menu" : gameMode;
 }
 
-async function joinMultiplayerRoom(roomName, playerName) {
+async function joinMultiplayerRoom(roomName, playerName, mode = "classic") {
   if (multiplayerManager) {
     await leaveMultiplayerRoom();
   }
   clearStatusEffect();
   multiplayerManager = new MultiplayerManager(multiplayerLobby);
-  await multiplayerManager.join(roomName, playerName);
+  await multiplayerManager.join(roomName, playerName, mode);
   safeStoreName(playerName);
   multiplayerManager.updateInputFromControls();
   hideModeSelection();
@@ -2598,6 +2602,29 @@ function drawFish() {
   drawFishSprite(fish);
 }
 
+function drawBombLabel(playerState, timer) {
+  if (!playerState || !ctx) {
+    return;
+  }
+  const label = `💣 ${Math.max(timer || 0, 0).toFixed(1)} c`;
+  ctx.save();
+  ctx.font = "16px 'Fredoka', sans-serif";
+  const metrics = ctx.measureText(label);
+  const padding = 8;
+  const width = metrics.width + padding * 2;
+  const height = 22;
+  const x = playerState.x - width / 2;
+  const y = playerState.y - playerState.size / 2 - height - 6;
+  ctx.fillStyle = "rgba(255, 87, 87, 0.9)";
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeRect(x, y, width, height);
+  ctx.fillStyle = "#fff";
+  ctx.fillText(label, x + padding, y + height - 7);
+  ctx.restore();
+}
+
 function prepareCanvasForFrame() {
   const dpr = window.devicePixelRatio || 1;
   const targetSize = Math.round(WORLD_SIZE * dpr);
@@ -2828,6 +2855,9 @@ function applyMultiplayerStatePatch(previousState, patch) {
   if (patch.phase !== undefined) {
     nextState.phase = patch.phase;
   }
+  if (patch.mode !== undefined) {
+    nextState.mode = patch.mode;
+  }
   if (patch.countdown !== undefined) {
     nextState.countdown = patch.countdown;
   }
@@ -2839,6 +2869,12 @@ function applyMultiplayerStatePatch(previousState, patch) {
   }
   if (patch.message !== undefined) {
     nextState.message = patch.message;
+  }
+  if (patch.bombHolder !== undefined) {
+    nextState.bombHolder = patch.bombHolder;
+  }
+  if (patch.bombTimer !== undefined) {
+    nextState.bombTimer = patch.bombTimer;
   }
   if (patch.winnerId !== undefined) {
     nextState.winnerId = patch.winnerId;
@@ -2891,6 +2927,7 @@ class MultiplayerManager {
     this.playerId = playerId;
     this.playerName = "";
     this.roomName = "";
+    this.mode = "classic";
     this.socket = null;
     this.state = null;
     this.previousRenderState = null;
@@ -2911,10 +2948,11 @@ class MultiplayerManager {
     this.reconnecting = false;
   }
 
-  async join(roomName, playerName) {
+  async join(roomName, playerName, mode = "classic") {
     await this.leave();
     this.roomName = roomName;
     this.playerName = playerName;
+    this.mode = mode || "classic";
     this.ready = false;
     this.reconnectEnabled = true;
     this.reconnectAttempts = 0;
@@ -2941,6 +2979,7 @@ class MultiplayerManager {
     this.ready = false;
     this.roomName = "";
     this.playerName = "";
+    this.mode = "classic";
     this.updateReadyButton();
     this.updateHud();
   }
@@ -2949,7 +2988,8 @@ class MultiplayerManager {
     const params = new URLSearchParams({
       room: this.roomName,
       playerId: this.playerId,
-      name: this.playerName
+      name: this.playerName,
+      mode: this.mode
     });
     const socketUrl = `${WS_BASE_URL}/ws?${params.toString()}`;
 
@@ -3115,6 +3155,7 @@ class MultiplayerManager {
     this.previousRenderState = previousState || nextState;
     this.smoothingStartTime = now;
     this.state = nextState;
+    this.mode = nextState.mode || this.mode;
     const previousPhase = previousState?.phase;
     this.handleStateAudio(previousState, nextState);
     syncMultiplayerStatusEffect(nextState.statusEffect);
@@ -3183,7 +3224,8 @@ class MultiplayerManager {
 
   showRoundResults(state) {
     const players = [...(state?.players || [])];
-    const sorted = players.sort((a, b) => b.score - a.score);
+    const isBombMode = state?.mode === "bomb-pass";
+    const sorted = players.sort((a, b) => (isBombMode ? Number(b.alive) - Number(a.alive) : b.score - a.score));
     const winner = state?.winnerId
       ? sorted.find((player) => player.id === state.winnerId)
       : sorted[0];
@@ -3193,10 +3235,12 @@ class MultiplayerManager {
       summaryParts.push(state.message);
     }
     if (winner) {
-      summaryParts.push(`Победитель: ${winner.name} (${winner.score})`);
+      summaryParts.push(`Победитель: ${winner.name}${isBombMode ? "" : ` (${winner.score})`}`);
     }
     if (sorted.length > 0) {
-      const scoresText = sorted.map((player) => `${player.name}: ${player.score}`).join(", ");
+      const scoresText = isBombMode
+        ? sorted.map((player) => `${player.name}: ${player.alive ? "выжил" : "выбыл"}`).join(", ")
+        : sorted.map((player) => `${player.name}: ${player.score}`).join(", ");
       summaryParts.push(`Итоги — ${scoresText}`);
     }
 
@@ -3242,6 +3286,12 @@ class MultiplayerManager {
       players.forEach((player) => {
         drawCatSprite(player);
       });
+      if (this.mode === "bomb-pass" && this.state.bombHolder) {
+        const holder = players.find((player) => player.id === this.state.bombHolder);
+        if (holder) {
+          drawBombLabel(holder, this.state.bombTimer ?? 0);
+        }
+      }
     }
     multiplayerRenderHandle = requestAnimationFrame(this.renderFrameBound);
   }
@@ -3409,6 +3459,7 @@ class MultiplayerManager {
     if (!multiplayerLobbyCard || multiplayerLobbyCard.classList.contains("hidden")) {
       return;
     }
+    const isBombMode = this.mode === "bomb-pass" || this.state?.mode === "bomb-pass";
     if (multiplayerRoomLabel) {
       multiplayerRoomLabel.textContent = this.roomName;
     }
@@ -3425,14 +3476,16 @@ class MultiplayerManager {
     if (multiplayerStatusEl) {
       let message = this.state?.message || "Подождите немного, идёт подключение";
       if (this.state?.phase === "ended" && players.length > 0) {
-        const sorted = [...players].sort((a, b) => b.score - a.score);
+        const sorted = [...players].sort((a, b) => (isBombMode ? Number(b.alive) - Number(a.alive) : b.score - a.score));
         const winner = this.state.winnerId
           ? sorted.find((player) => player.id === this.state.winnerId)
           : sorted[0];
         const winnerText = winner
-          ? `Победитель: ${winner.name} (${winner.score})`
+          ? `Победитель: ${winner.name}${isBombMode ? "" : ` (${winner.score})`}`
           : "Победитель не определён";
-        const scoresText = sorted.map((player) => `${player.name}: ${player.score}`).join(", ");
+        const scoresText = isBombMode
+          ? sorted.map((player) => `${player.name}: ${player.alive ? "выжил" : "выбыл"}`).join(", ")
+          : sorted.map((player) => `${player.name}: ${player.score}`).join(", ");
         message = `${message}. ${winnerText}. Итоги — ${scoresText}`;
       }
       multiplayerStatusEl.textContent = message;
@@ -3450,12 +3503,22 @@ class MultiplayerManager {
     if (multiplayerHudRoom) {
       multiplayerHudRoom.textContent = this.roomName;
     }
+    if (multiplayerHudMode) {
+      multiplayerHudMode.textContent = this.mode === "bomb-pass" ? "Бомба-пас" : "Охота за рыбкой";
+    }
     const phase = this.state.phase;
+    const isBombMode = this.mode === "bomb-pass";
     const shouldShowHud = phase === "countdown" || phase === "playing" || phase === "ended";
     multiplayerHud.classList.toggle("hidden", !shouldShowHud);
     if (shouldShowHud && multiplayerHudPlayers) {
       multiplayerHudPlayers.innerHTML = "";
-      const sorted = [...(this.state.players || [])].sort((a, b) => b.score - a.score);
+      const sorted = [...(this.state.players || [])].sort((a, b) => {
+        if (isBombMode && a.alive !== b.alive) {
+          return a.alive ? -1 : 1;
+        }
+        return (b.score || 0) - (a.score || 0);
+      });
+      const bombHolderId = this.state.bombHolder;
       sorted.forEach((player) => {
         const item = document.createElement("li");
         let status = "Ждёт";
@@ -3466,7 +3529,11 @@ class MultiplayerManager {
         } else if (phase === "ended") {
           status = this.state.winnerId === player.id ? "Победитель" : "Итог";
         }
-        item.innerHTML = `<span>${escapeHtml(player.name)}</span><span>${player.score} · ${status}</span>`;
+        if (isBombMode && phase === "playing" && bombHolderId === player.id) {
+          status = `${status} · 💣`;
+        }
+        const rightText = isBombMode ? status : `${player.score} · ${status}`;
+        item.innerHTML = `<span>${escapeHtml(player.name)}</span><span>${rightText}</span>`;
         multiplayerHudPlayers.appendChild(item);
       });
     }
@@ -3474,7 +3541,11 @@ class MultiplayerManager {
       if (phase === "countdown") {
         multiplayerCountdownEl.textContent = `Старт через ${Math.ceil(this.state.countdown || 0)} с`;
       } else if (phase === "playing") {
-        multiplayerCountdownEl.textContent = `Время: ${(this.state.remaining || 0).toFixed(1)} c`;
+        if (isBombMode) {
+          multiplayerCountdownEl.textContent = `Бомба: ${(this.state.bombTimer || 0).toFixed(1)} c`;
+        } else {
+          multiplayerCountdownEl.textContent = `Время: ${(this.state.remaining || 0).toFixed(1)} c`;
+        }
       } else if (phase === "ended") {
         multiplayerCountdownEl.textContent = "Раунд завершён";
       } else {
@@ -3492,7 +3563,10 @@ class MultiplayerManager {
       scoreEl.textContent = "0";
     }
     if (timerEl) {
-      const timerValue = phase === "countdown" ? this.state.countdown : this.state.remaining;
+      let timerValue = phase === "countdown" ? this.state.countdown : this.state.remaining;
+      if (this.mode === "bomb-pass" && phase === "playing") {
+        timerValue = this.state.bombTimer;
+      }
       timerEl.textContent = timerValue != null ? Math.max(timerValue, 0).toFixed(1) : "0.0";
     }
   }
@@ -3716,8 +3790,12 @@ if (multiplayerRoomList) {
     if (!roomName) {
       return;
     }
+    const roomMode = target.dataset?.roomMode || "classic";
     if (multiplayerRoomInput) {
       multiplayerRoomInput.value = roomName;
+    }
+    if (multiplayerModeSelect) {
+      multiplayerModeSelect.value = roomMode;
     }
     if (multiplayerNameInput && !multiplayerNameInput.value && playerNameInput?.value) {
       multiplayerNameInput.value = playerNameInput.value;
@@ -3747,6 +3825,7 @@ if (multiplayerJoinForm) {
     }
     const rawName = multiplayerNameInput ? multiplayerNameInput.value.trim() : "";
     const rawRoom = multiplayerRoomInput ? multiplayerRoomInput.value.trim() : "";
+    const selectedMode = multiplayerModeSelect ? multiplayerModeSelect.value : "classic";
     if (!rawName) {
       multiplayerErrorEl.textContent = "Введите имя игрока.";
       if (multiplayerNameInput) {
@@ -3776,7 +3855,8 @@ if (multiplayerJoinForm) {
     multiplayerJoinInProgress = true;
     multiplayerErrorEl.textContent = "";
     try {
-      await joinMultiplayerRoom(normalizedRoom, normalizedName);
+      const normalizedMode = existingRoom?.mode || selectedMode || "classic";
+      await joinMultiplayerRoom(normalizedRoom, normalizedName, normalizedMode);
       if (playerNameInput) {
         playerNameInput.value = normalizedName;
       }

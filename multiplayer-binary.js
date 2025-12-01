@@ -235,12 +235,15 @@ export function encodeStateToBase64(state) {
   writer.writeUint32(Math.floor(state.serverTime || 0));
   writer.writeUint32(state.tickIndex >>> 0 || 0);
   writer.writeString(state.roomName || "");
+  writer.writeString(state.mode || "");
   writer.writeUint8(PHASE_CODES[state.phase] ?? 0);
   writer.writeFloat32(state.countdown || 0);
   writer.writeFloat32(state.remaining || 0);
   writer.writeBool(Boolean(state.goldenChainActive));
   writer.writeString(state.winnerId || "");
   writer.writeString(state.message || "");
+  writer.writeString(state.bombHolder || "");
+  writer.writeFloat32(state.bombTimer || 0);
 
   const statusType = state.statusEffect?.type || "";
   writer.writeString(statusType);
@@ -317,12 +320,15 @@ function decodeFullState(reader) {
   const serverTime = reader.readUint32();
   const tickIndex = reader.readUint32();
   const roomName = reader.readString();
+  const mode = reader.readString();
   const phaseCode = reader.readUint8();
   const countdown = reader.readFloat32();
   const remaining = reader.readFloat32();
   const goldenChainActive = reader.readBool();
   const winnerId = reader.readString();
   const message = reader.readString();
+  const bombHolder = reader.readString();
+  const bombTimer = reader.readFloat32();
   const statusType = reader.readString();
   const statusRemaining = reader.readFloat32();
   const fishType = reader.readUint8();
@@ -355,9 +361,12 @@ function decodeFullState(reader) {
   return {
     state: {
       phase: Object.keys(PHASE_CODES).find((key) => PHASE_CODES[key] === phaseCode) || "lobby",
+      mode,
       countdown,
       remaining,
       message,
+      bombHolder,
+      bombTimer,
       winnerId: winnerId || null,
       goldenChainActive,
       statusEffect: statusType ? { type: statusType, remaining: statusRemaining } : null,
@@ -433,6 +442,15 @@ function decodePatch(reader) {
     for (let i = 0; i < count; i += 1) {
       patch.removedPlayers.push(reader.readString());
     }
+  }
+  if (flags2 & (1 << 5)) {
+    patch.mode = reader.readString();
+  }
+  if (flags2 & (1 << 6)) {
+    patch.bombHolder = reader.readString();
+  }
+  if (flags2 & (1 << 7)) {
+    patch.bombTimer = reader.readFloat32();
   }
   return { patch };
 }
