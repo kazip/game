@@ -1,686 +1,18 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"math/rand"
 	"net/http"
 	"os"
-	"sort"
 	"sync"
 	"time"
 
+	"catgame/protocol"
 	"github.com/gorilla/websocket"
 )
-
-const (
-	worldSize         = 500.0
-	catSpeed          = 180.0
-	catSize           = 36.0
-	fishSize          = 28.0
-	fishSwimSpeed     = 36.0
-	gridSize          = 10
-	gridCellSize      = worldSize / gridSize
-	wallThickness     = gridCellSize * 0.6
-	maxWallTotalLen   = 10
-	tickRate          = time.Second / 60
-	broadcastRate     = time.Second / 15
-	countdownDuration = 3 * time.Second
-	roundDuration     = 60 * time.Second
-	fishCatchDistance = 34.0
-	maxMines          = 3
-	mineSize          = 26.0
-	mineMinDistance   = 25.0
-	powerUpSize       = 34.0
-	powerUpChance     = 0.05
-	powerUpLifetime   = 5.0
-	powerUpDuration   = 30.0
-	timeIncreaseLimit = 15.0
-	timeDecreaseLimit = 5.0
-	dataFileName      = "data.json"
-	reconnectGrace    = 10 * time.Second
-)
-
-var (
-	phaseCodes       = map[string]uint8{"lobby": 0, "countdown": 1, "playing": 2, "ended": 3}
-	fishTypeCodes    = map[string]uint8{"normal": 0, "golden": 1, "timeIncrease": 2, "timeDecrease": 3}
-	powerUpTypeCodes = map[string]uint8{"none": 0, "fast": 1, "slow": 2, "invert": 3}
-
-	messageTypeFull  uint8 = 0
-	messageTypePatch uint8 = 1
-)
-
-type vector struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-}
-
-type catAppearance map[string]any
-
-type catProfile struct {
-	PlayerID   string        `json:"playerId"`
-	Name       string        `json:"name"`
-	Appearance catAppearance `json:"appearance"`
-}
-
-type scoreEntry struct {
-	PlayerID  string    `json:"playerId"`
-	Name      string    `json:"name"`
-	Score     int       `json:"score"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type playerState struct {
-	ID         string        `json:"id"`
-	Name       string        `json:"name"`
-	Ready      bool          `json:"ready"`
-	Alive      bool          `json:"alive"`
-	X          float64       `json:"x"`
-	Y          float64       `json:"y"`
-	Size       float64       `json:"size"`
-	Facing     int           `json:"facing"`
-	Moving     bool          `json:"moving"`
-	WalkCycle  float64       `json:"walkCycle"`
-	StepAccum  float64       `json:"stepAccumulator"`
-	Score      int           `json:"score"`
-	Appearance catAppearance `json:"appearance"`
-}
-
-type fishState struct {
-	X         float64 `json:"x"`
-	Y         float64 `json:"y"`
-	Size      float64 `json:"size"`
-	Alive     bool    `json:"alive"`
-	Spawned   bool    `json:"spawned,omitempty"`
-	Type      string  `json:"type"`
-	Direction int     `json:"direction"`
-}
-
-type gameState struct {
-	RoomName   string         `json:"roomName"`
-	Phase      string         `json:"phase"`
-	Countdown  float64        `json:"countdown"`
-	Remaining  float64        `json:"remaining"`
-	Message    string         `json:"message"`
-	Players    []*playerState `json:"players"`
-	Fish       fishState      `json:"fish"`
-	Walls      []wall         `json:"walls"`
-	Mines      []mine         `json:"mines"`
-	PowerUp    powerUpState   `json:"powerUp"`
-	Status     *statusEffect  `json:"statusEffect"`
-	WinnerID   string         `json:"winnerId"`
-	Golden     bool           `json:"goldenChainActive"`
-	TickIndex  uint32         `json:"tickIndex"`
-	ServerTime int64          `json:"serverTime"`
-}
-
-type wall struct {
-	X      float64 `json:"x"`
-	Y      float64 `json:"y"`
-	Width  float64 `json:"width"`
-	Height float64 `json:"height"`
-}
-
-type mine struct {
-	X    float64 `json:"x"`
-	Y    float64 `json:"y"`
-	Size float64 `json:"size"`
-}
-
-type powerUpState struct {
-	X         float64 `json:"x"`
-	Y         float64 `json:"y"`
-	Size      float64 `json:"size"`
-	Active    bool    `json:"active"`
-	Remaining float64 `json:"remaining"`
-	Type      string  `json:"type"`
-}
-
-type statusEffect struct {
-	Type      string  `json:"type"`
-	Remaining float64 `json:"remaining"`
-}
-
-type gridCell struct {
-	Row int
-	Col int
-}
-
-type wallSegment struct {
-	Row         int
-	Col         int
-	Length      int
-	Orientation string
-}
-
-type wsMessage struct {
-	Type       string        `json:"type"`
-	Ready      *bool         `json:"ready,omitempty"`
-	Vector     *vector       `json:"vector,omitempty"`
-	Message    *chatMessage  `json:"message,omitempty"`
-	Appearance catAppearance `json:"appearance,omitempty"`
-	State      *gameState    `json:"state,omitempty"`
-	Patch      *statePatch   `json:"patch,omitempty"`
-	Full       bool          `json:"full,omitempty"`
-	Error      string        `json:"error,omitempty"`
-}
-
-type playerPatch struct {
-	ID         string        `json:"id"`
-	Name       *string       `json:"name,omitempty"`
-	Ready      *bool         `json:"ready,omitempty"`
-	Alive      *bool         `json:"alive,omitempty"`
-	X          *float64      `json:"x,omitempty"`
-	Y          *float64      `json:"y,omitempty"`
-	Size       *float64      `json:"size,omitempty"`
-	Facing     *int          `json:"facing,omitempty"`
-	Moving     *bool         `json:"moving,omitempty"`
-	WalkCycle  *float64      `json:"walkCycle,omitempty"`
-	StepAccum  *float64      `json:"stepAccumulator,omitempty"`
-	Score      *int          `json:"score,omitempty"`
-	Appearance catAppearance `json:"appearance,omitempty"`
-}
-
-type statePatch struct {
-	Phase          *string       `json:"phase,omitempty"`
-	Countdown      *float64      `json:"countdown,omitempty"`
-	Remaining      *float64      `json:"remaining,omitempty"`
-	Message        *string       `json:"message,omitempty"`
-	WinnerID       *string       `json:"winnerId,omitempty"`
-	Golden         *bool         `json:"goldenChainActive,omitempty"`
-	Status         *statusEffect `json:"statusEffect,omitempty"`
-	Fish           *fishState    `json:"fish,omitempty"`
-	PowerUp        *powerUpState `json:"powerUp,omitempty"`
-	Walls          []wall        `json:"walls,omitempty"`
-	Mines          []mine        `json:"mines,omitempty"`
-	Players        []playerPatch `json:"players,omitempty"`
-	RemovedPlayers []string      `json:"removedPlayers,omitempty"`
-}
-
-type chatMessage struct {
-	PlayerID string `json:"playerId"`
-	Name     string `json:"name"`
-	Text     string `json:"text"`
-	At       int64  `json:"at"`
-}
-
-func floatChanged(a, b float64) bool {
-	return math.Abs(a-b) > 0.0001
-}
-
-func stringPtr(v string) *string { return &v }
-
-func boolPtr(v bool) *bool { return &v }
-
-func floatPtr(v float64) *float64 { return &v }
-
-func intPtr(v int) *int { return &v }
-
-func roundFloat(v float64, decimals int) float64 {
-	factor := math.Pow10(decimals)
-	return math.Round(v*factor) / factor
-}
-
-func quantizeCoord(v float64) float64 {
-	return math.Round(v)
-}
-
-func quantizeWalkCycle(v float64) float64 {
-	if v < 0 {
-		return 0
-	}
-	if v > 1 {
-		return 1
-	}
-	return roundFloat(v*65535, 0) / 65535
-}
-
-func quantizeSeconds(v float64) float64 {
-	return roundFloat(v, 3)
-}
-
-func quantizePlayerForSend(p *playerState) {
-	p.X = quantizeCoord(p.X)
-	p.Y = quantizeCoord(p.Y)
-	p.Size = quantizeCoord(p.Size)
-	p.WalkCycle = quantizeWalkCycle(p.WalkCycle)
-	p.StepAccum = roundFloat(p.StepAccum, 3)
-}
-
-type binaryWriter struct {
-	buf bytes.Buffer
-}
-
-func (w *binaryWriter) writeUint8(v uint8) {
-	_ = w.buf.WriteByte(v)
-}
-
-func (w *binaryWriter) writeBool(v bool) {
-	if v {
-		w.writeUint8(1)
-		return
-	}
-	w.writeUint8(0)
-}
-
-func (w *binaryWriter) writeInt16(v int16) {
-	_ = binary.Write(&w.buf, binary.BigEndian, v)
-}
-
-func (w *binaryWriter) writeUint16(v uint16) {
-	_ = binary.Write(&w.buf, binary.BigEndian, v)
-}
-
-func (w *binaryWriter) writeUint32(v uint32) {
-	_ = binary.Write(&w.buf, binary.BigEndian, v)
-}
-
-func (w *binaryWriter) writeFloat32(v float32) {
-	_ = binary.Write(&w.buf, binary.BigEndian, v)
-}
-
-func (w *binaryWriter) writeString(v string) {
-	bytesValue := []byte(v)
-	if len(bytesValue) > math.MaxUint16 {
-		bytesValue = bytesValue[:math.MaxUint16]
-	}
-	w.writeUint16(uint16(len(bytesValue)))
-	_, _ = w.buf.Write(bytesValue)
-}
-
-func (w *binaryWriter) bytes() []byte {
-	return w.buf.Bytes()
-}
-
-type binaryReader struct {
-	data   []byte
-	offset int
-}
-
-func (r *binaryReader) readUint8() (uint8, error) {
-	if r.offset+1 > len(r.data) {
-		return 0, fmt.Errorf("out of bounds")
-	}
-	value := r.data[r.offset]
-	r.offset++
-	return value, nil
-}
-
-func (r *binaryReader) readInt16() (int16, error) {
-	if r.offset+2 > len(r.data) {
-		return 0, fmt.Errorf("out of bounds")
-	}
-	value := int16(binary.BigEndian.Uint16(r.data[r.offset:]))
-	r.offset += 2
-	return value, nil
-}
-
-func (r *binaryReader) readUint16() (uint16, error) {
-	if r.offset+2 > len(r.data) {
-		return 0, fmt.Errorf("out of bounds")
-	}
-	value := binary.BigEndian.Uint16(r.data[r.offset:])
-	r.offset += 2
-	return value, nil
-}
-
-func (r *binaryReader) readFloat32() (float32, error) {
-	if r.offset+4 > len(r.data) {
-		return 0, fmt.Errorf("out of bounds")
-	}
-	bits := binary.BigEndian.Uint32(r.data[r.offset:])
-	r.offset += 4
-	return math.Float32frombits(bits), nil
-}
-
-func (r *binaryReader) readString() (string, error) {
-	length, err := r.readUint16()
-	if err != nil {
-		return "", err
-	}
-	if r.offset+int(length) > len(r.data) {
-		return "", fmt.Errorf("out of bounds")
-	}
-	value := string(r.data[r.offset : r.offset+int(length)])
-	r.offset += int(length)
-	return value, nil
-}
-
-func (r *binaryReader) readFloatVector() (*vector, error) {
-	x, err := r.readFloat32()
-	if err != nil {
-		return nil, err
-	}
-	y, err := r.readFloat32()
-	if err != nil {
-		return nil, err
-	}
-	return &vector{X: float64(x), Y: float64(y)}, nil
-}
-
-func decodeInputBuffer(data []byte) (*string, *vector) {
-	reader := &binaryReader{data: data}
-	playerID, err := reader.readString()
-	if err != nil {
-		return nil, nil
-	}
-	vec, err := reader.readFloatVector()
-	if err != nil {
-		return nil, nil
-	}
-	return &playerID, vec
-}
-
-func encodeWallsBinary(walls []wall, writer *binaryWriter) {
-	count := len(walls)
-	if count > 1024 {
-		count = 1024
-	}
-	writer.writeUint16(uint16(count))
-	for i := 0; i < count; i++ {
-		writer.writeFloat32(float32(walls[i].X))
-		writer.writeFloat32(float32(walls[i].Y))
-		writer.writeFloat32(float32(walls[i].Width))
-		writer.writeFloat32(float32(walls[i].Height))
-	}
-}
-
-func encodeMinesBinary(mines []mine, writer *binaryWriter) {
-	count := len(mines)
-	if count > 32 {
-		count = 32
-	}
-	writer.writeUint8(uint8(count))
-	for i := 0; i < count; i++ {
-		writer.writeFloat32(float32(mines[i].X))
-		writer.writeFloat32(float32(mines[i].Y))
-		writer.writeFloat32(float32(mines[i].Size))
-	}
-}
-
-func encodePlayersBinary(players []*playerState, writer *binaryWriter) {
-	count := len(players)
-	if count > 32 {
-		count = 32
-	}
-	writer.writeUint8(uint8(count))
-	for i := 0; i < count; i++ {
-		p := players[i]
-		writer.writeString(p.ID)
-		writer.writeString(p.Name)
-		writer.writeUint32(uint32(p.Score))
-		writer.writeBool(p.Ready)
-		writer.writeBool(p.Alive)
-		writer.writeFloat32(float32(p.X))
-		writer.writeFloat32(float32(p.Y))
-		writer.writeFloat32(float32(p.Size))
-		writer.writeInt16(int16(p.Facing))
-		writer.writeBool(p.Moving)
-		writer.writeFloat32(float32(p.WalkCycle))
-		writer.writeFloat32(float32(p.StepAccum))
-
-		appearance := stringifyAppearance(p.Appearance)
-		if len(appearance) > 300 {
-			appearance = appearance[:300]
-		}
-		writer.writeString(appearance)
-	}
-}
-
-func encodeStateBinary(state gameState) []byte {
-	writer := &binaryWriter{}
-	writer.writeUint8(messageTypeFull)
-	writer.writeUint32(uint32(state.ServerTime))
-	writer.writeUint32(state.TickIndex)
-	writer.writeString(state.RoomName)
-	writer.writeUint8(phaseCodes[state.Phase])
-	writer.writeFloat32(float32(state.Countdown))
-	writer.writeFloat32(float32(state.Remaining))
-	writer.writeBool(state.Golden)
-	writer.writeString(state.WinnerID)
-	writer.writeString(state.Message)
-
-	statusType := ""
-	statusRemaining := float32(0)
-	if state.Status != nil {
-		statusType = state.Status.Type
-		statusRemaining = float32(state.Status.Remaining)
-	}
-	writer.writeString(statusType)
-	writer.writeFloat32(statusRemaining)
-
-	writer.writeUint8(fishTypeCodes[state.Fish.Type])
-	writer.writeFloat32(float32(state.Fish.X))
-	writer.writeFloat32(float32(state.Fish.Y))
-	writer.writeFloat32(float32(state.Fish.Size))
-	writer.writeBool(state.Fish.Alive)
-	writer.writeBool(state.Fish.Spawned)
-	writer.writeInt16(int16(state.Fish.Direction))
-
-	writer.writeBool(state.PowerUp.Active)
-	writer.writeFloat32(float32(state.PowerUp.X))
-	writer.writeFloat32(float32(state.PowerUp.Y))
-	writer.writeFloat32(float32(state.PowerUp.Size))
-	writer.writeFloat32(float32(state.PowerUp.Remaining))
-	writer.writeUint8(powerUpTypeCodes[state.PowerUp.Type])
-
-	encodeWallsBinary(state.Walls, writer)
-	encodeMinesBinary(state.Mines, writer)
-	encodePlayersBinary(state.Players, writer)
-	return writer.bytes()
-}
-
-func encodePlayerPatchBinary(p playerPatch, writer *binaryWriter) {
-	writer.writeString(p.ID)
-	var flags1 uint8
-	var flags2 uint8
-	if p.Name != nil {
-		flags1 |= 1 << 0
-	}
-	if p.Ready != nil {
-		flags1 |= 1 << 1
-	}
-	if p.Alive != nil {
-		flags1 |= 1 << 2
-	}
-	if p.X != nil {
-		flags1 |= 1 << 3
-	}
-	if p.Y != nil {
-		flags1 |= 1 << 4
-	}
-	if p.Size != nil {
-		flags1 |= 1 << 5
-	}
-	if p.Facing != nil {
-		flags1 |= 1 << 6
-	}
-	if p.Moving != nil {
-		flags1 |= 1 << 7
-	}
-	if p.WalkCycle != nil {
-		flags2 |= 1 << 0
-	}
-	if p.StepAccum != nil {
-		flags2 |= 1 << 1
-	}
-	if p.Score != nil {
-		flags2 |= 1 << 2
-	}
-	if len(p.Appearance) > 0 {
-		flags2 |= 1 << 3
-	}
-
-	writer.writeUint8(flags1)
-	writer.writeUint8(flags2)
-
-	if p.Name != nil {
-		writer.writeString(*p.Name)
-	}
-	if p.Ready != nil {
-		writer.writeBool(*p.Ready)
-	}
-	if p.Alive != nil {
-		writer.writeBool(*p.Alive)
-	}
-	if p.X != nil {
-		writer.writeFloat32(float32(*p.X))
-	}
-	if p.Y != nil {
-		writer.writeFloat32(float32(*p.Y))
-	}
-	if p.Size != nil {
-		writer.writeFloat32(float32(*p.Size))
-	}
-	if p.Facing != nil {
-		writer.writeInt16(int16(*p.Facing))
-	}
-	if p.Moving != nil {
-		writer.writeBool(*p.Moving)
-	}
-	if p.WalkCycle != nil {
-		writer.writeFloat32(float32(*p.WalkCycle))
-	}
-	if p.StepAccum != nil {
-		writer.writeFloat32(float32(*p.StepAccum))
-	}
-	if p.Score != nil {
-		writer.writeUint32(uint32(*p.Score))
-	}
-	if len(p.Appearance) > 0 {
-		appearance := stringifyAppearance(p.Appearance)
-		if len(appearance) > 300 {
-			appearance = appearance[:300]
-		}
-		writer.writeString(appearance)
-	}
-}
-
-func encodePatchBinary(patch *statePatch, serverTime int64, tickIndex uint32) []byte {
-	writer := &binaryWriter{}
-	writer.writeUint8(messageTypePatch)
-	writer.writeUint32(uint32(serverTime))
-	writer.writeUint32(tickIndex)
-
-	var flags1 uint8
-	var flags2 uint8
-
-	if patch.Phase != nil {
-		flags1 |= 1 << 0
-	}
-	if patch.Countdown != nil {
-		flags1 |= 1 << 1
-	}
-	if patch.Remaining != nil {
-		flags1 |= 1 << 2
-	}
-	if patch.Message != nil {
-		flags1 |= 1 << 3
-	}
-	if patch.WinnerID != nil {
-		flags1 |= 1 << 4
-	}
-	if patch.Golden != nil {
-		flags1 |= 1 << 5
-	}
-	if patch.Status != nil {
-		flags1 |= 1 << 6
-	}
-	if patch.Fish != nil {
-		flags1 |= 1 << 7
-	}
-
-	if patch.PowerUp != nil {
-		flags2 |= 1 << 0
-	}
-	if len(patch.Walls) > 0 {
-		flags2 |= 1 << 1
-	}
-	if len(patch.Mines) > 0 {
-		flags2 |= 1 << 2
-	}
-	if len(patch.Players) > 0 {
-		flags2 |= 1 << 3
-	}
-	if len(patch.RemovedPlayers) > 0 {
-		flags2 |= 1 << 4
-	}
-
-	writer.writeUint8(flags1)
-	writer.writeUint8(flags2)
-
-	if patch.Phase != nil {
-		writer.writeString(*patch.Phase)
-	}
-	if patch.Countdown != nil {
-		writer.writeFloat32(float32(*patch.Countdown))
-	}
-	if patch.Remaining != nil {
-		writer.writeFloat32(float32(*patch.Remaining))
-	}
-	if patch.Message != nil {
-		writer.writeString(*patch.Message)
-	}
-	if patch.WinnerID != nil {
-		writer.writeString(*patch.WinnerID)
-	}
-	if patch.Golden != nil {
-		writer.writeBool(*patch.Golden)
-	}
-	if patch.Status != nil {
-		writer.writeString(patch.Status.Type)
-		writer.writeFloat32(float32(patch.Status.Remaining))
-	}
-	if patch.Fish != nil {
-		writer.writeUint8(fishTypeCodes[patch.Fish.Type])
-		writer.writeFloat32(float32(patch.Fish.X))
-		writer.writeFloat32(float32(patch.Fish.Y))
-		writer.writeFloat32(float32(patch.Fish.Size))
-		writer.writeBool(patch.Fish.Alive)
-		writer.writeBool(patch.Fish.Spawned)
-		writer.writeInt16(int16(patch.Fish.Direction))
-	}
-	if patch.PowerUp != nil {
-		writer.writeBool(patch.PowerUp.Active)
-		writer.writeFloat32(float32(patch.PowerUp.X))
-		writer.writeFloat32(float32(patch.PowerUp.Y))
-		writer.writeFloat32(float32(patch.PowerUp.Size))
-		writer.writeFloat32(float32(patch.PowerUp.Remaining))
-		writer.writeUint8(powerUpTypeCodes[patch.PowerUp.Type])
-	}
-	if len(patch.Walls) > 0 {
-		encodeWallsBinary(patch.Walls, writer)
-	}
-	if len(patch.Mines) > 0 {
-		encodeMinesBinary(patch.Mines, writer)
-	}
-	if len(patch.Players) > 0 {
-		count := len(patch.Players)
-		if count > 32 {
-			count = 32
-		}
-		writer.writeUint8(uint8(count))
-		for i := 0; i < count; i++ {
-			encodePlayerPatchBinary(patch.Players[i], writer)
-		}
-	}
-	if len(patch.RemovedPlayers) > 0 {
-		count := len(patch.RemovedPlayers)
-		if count > 32 {
-			count = 32
-		}
-		writer.writeUint8(uint8(count))
-		for i := 0; i < count; i++ {
-			writer.writeString(patch.RemovedPlayers[i])
-		}
-	}
-
-	return writer.bytes()
-}
 
 func quantizeStateForSend(state *gameState) {
 	state.Countdown = quantizeSeconds(state.Countdown)
@@ -715,6 +47,145 @@ func quantizeStateForSend(state *gameState) {
 	for _, p := range state.Players {
 		quantizePlayerForSend(p)
 	}
+}
+
+func decodeInputBuffer(data []byte) (*string, *vector) {
+	id, vec := protocol.DecodeInputBuffer(data)
+	if id == nil || vec == nil {
+		return nil, nil
+	}
+	return id, &vector{X: vec.X, Y: vec.Y}
+}
+
+func toProtocolPlayerState(p *playerState) protocol.PlayerState {
+	appearance := stringifyAppearance(p.Appearance)
+	if len(appearance) > 300 {
+		appearance = appearance[:300]
+	}
+	return protocol.PlayerState{
+		ID:         p.ID,
+		Name:       p.Name,
+		Ready:      p.Ready,
+		Alive:      p.Alive,
+		X:          p.X,
+		Y:          p.Y,
+		Size:       p.Size,
+		Facing:     p.Facing,
+		Moving:     p.Moving,
+		WalkCycle:  p.WalkCycle,
+		StepAccum:  p.StepAccum,
+		Score:      p.Score,
+		Appearance: appearance,
+	}
+}
+
+func toProtocolGameState(state gameState) protocol.GameState {
+	players := make([]protocol.PlayerState, len(state.Players))
+	for i, p := range state.Players {
+		players[i] = toProtocolPlayerState(p)
+	}
+	walls := make([]protocol.Wall, len(state.Walls))
+	for i, w := range state.Walls {
+		walls[i] = protocol.Wall{X: w.X, Y: w.Y, Width: w.Width, Height: w.Height}
+	}
+	mines := make([]protocol.Mine, len(state.Mines))
+	for i, m := range state.Mines {
+		mines[i] = protocol.Mine{X: m.X, Y: m.Y, Size: m.Size}
+	}
+	var status *protocol.StatusEffect
+	if state.Status != nil {
+		status = &protocol.StatusEffect{Type: state.Status.Type, Remaining: state.Status.Remaining}
+	}
+
+	return protocol.GameState{
+		RoomName:   state.RoomName,
+		Phase:      state.Phase,
+		Countdown:  state.Countdown,
+		Remaining:  state.Remaining,
+		Message:    state.Message,
+		Players:    players,
+		Fish:       protocol.FishState(state.Fish),
+		Walls:      walls,
+		Mines:      mines,
+		PowerUp:    protocol.PowerUpState(state.PowerUp),
+		Status:     status,
+		WinnerID:   state.WinnerID,
+		Golden:     state.Golden,
+		TickIndex:  state.TickIndex,
+		ServerTime: state.ServerTime,
+	}
+}
+
+func toProtocolPlayerPatch(p playerPatch) protocol.PlayerPatch {
+	protoPatch := protocol.PlayerPatch{ID: p.ID}
+	protoPatch.Name = p.Name
+	protoPatch.Ready = p.Ready
+	protoPatch.Alive = p.Alive
+	protoPatch.X = p.X
+	protoPatch.Y = p.Y
+	protoPatch.Size = p.Size
+	protoPatch.Facing = p.Facing
+	protoPatch.Moving = p.Moving
+	protoPatch.WalkCycle = p.WalkCycle
+	protoPatch.StepAccum = p.StepAccum
+	protoPatch.Score = p.Score
+	if len(p.Appearance) > 0 {
+		appearance := stringifyAppearance(p.Appearance)
+		if len(appearance) > 300 {
+			appearance = appearance[:300]
+		}
+		protoPatch.Appearance = &appearance
+	}
+	return protoPatch
+}
+
+func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
+	if patch == nil {
+		return nil
+	}
+	protoPatch := &protocol.StatePatch{}
+	protoPatch.Phase = patch.Phase
+	protoPatch.Countdown = patch.Countdown
+	protoPatch.Remaining = patch.Remaining
+	protoPatch.Message = patch.Message
+	protoPatch.WinnerID = patch.WinnerID
+	protoPatch.Golden = patch.Golden
+	if patch.Status != nil {
+		protoPatch.Status = &protocol.StatusEffect{Type: patch.Status.Type, Remaining: patch.Status.Remaining}
+	}
+	if patch.Fish != nil {
+		fish := protocol.FishState(*patch.Fish)
+		protoPatch.Fish = &fish
+	}
+	if patch.PowerUp != nil {
+		power := protocol.PowerUpState(*patch.PowerUp)
+		protoPatch.PowerUp = &power
+	}
+	if len(patch.Walls) > 0 {
+		walls := make([]protocol.Wall, len(patch.Walls))
+		for i, w := range patch.Walls {
+			walls[i] = protocol.Wall{X: w.X, Y: w.Y, Width: w.Width, Height: w.Height}
+		}
+		protoPatch.Walls = walls
+	}
+	if len(patch.Mines) > 0 {
+		mines := make([]protocol.Mine, len(patch.Mines))
+		for i, m := range patch.Mines {
+			mines[i] = protocol.Mine{X: m.X, Y: m.Y, Size: m.Size}
+		}
+		protoPatch.Mines = mines
+	}
+	if len(patch.Players) > 0 {
+		players := make([]protocol.PlayerPatch, len(patch.Players))
+		for i, p := range patch.Players {
+			players[i] = toProtocolPlayerPatch(p)
+		}
+		protoPatch.Players = players
+	}
+	if len(patch.RemovedPlayers) > 0 {
+		protoPatch.RemovedPlayers = append(protoPatch.RemovedPlayers, patch.RemovedPlayers...)
+	}
+	return protoPatch
 }
 
 func statusEqual(a, b *statusEffect) bool {
@@ -1308,7 +779,7 @@ func (r *room) sendFullState(conn *websocket.Conn) {
 	r.mu.Unlock()
 	stateCopy.TickIndex = r.tickIndex
 	quantizeStateForSend(&stateCopy)
-	data := encodeStateBinary(stateCopy)
+	data := protocol.EncodeState(toProtocolGameState(stateCopy))
 	conn.WriteMessage(websocket.BinaryMessage, data)
 }
 
@@ -1627,10 +1098,11 @@ func (r *room) broadcastState() {
 	r.mu.Unlock()
 
 	var data []byte
+	protoState := toProtocolGameState(stateCopy)
 	if previous == nil {
-		data = encodeStateBinary(stateCopy)
+		data = protocol.EncodeState(protoState)
 	} else if patch := buildStatePatch(*previous, stateCopy); patch != nil {
-		data = encodePatchBinary(patch, stateCopy.ServerTime, stateCopy.TickIndex)
+		data = protocol.EncodePatch(toProtocolStatePatch(patch), protoState.ServerTime, protoState.TickIndex)
 	} else {
 		return
 	}
