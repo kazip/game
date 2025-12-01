@@ -10,8 +10,9 @@ const (
 	fishSize          = 28.0
 	fishSwimSpeed     = 36.0
 	gridSize          = 10
+	wallThicknessRate = 0.6
 	gridCellSize      = worldSize / gridSize
-	wallThickness     = gridCellSize * 0.6
+	wallThickness     = gridCellSize * wallThicknessRate
 	maxWallTotalLen   = 10
 	tickRate          = time.Second / 60
 	broadcastRate     = time.Second / 15
