@@ -4,6 +4,9 @@ const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
 const WORLD_SIZE = 500;
+const VIEW_SIZE = WORLD_SIZE;
+const BOMB_WORLD_MULTIPLIER = 5;
+const BOMB_MODE_WORLD_SIZE = WORLD_SIZE * BOMB_WORLD_MULTIPLIER;
 const MIN_BOARD_SIZE = 260;
 const GRID_SIZE = 10;
 const GRID_CELL_SIZE = WORLD_SIZE / GRID_SIZE;
@@ -112,6 +115,14 @@ const NORMAL_FISH_POINTS = 1;
 const GOLDEN_FISH_CHANCE = 0.05;
 const GOLDEN_FISH_TIME_LIMIT = 5;
 const GOLDEN_FISH_POINTS = 5;
+
+function getViewportSize() {
+  return VIEW_SIZE;
+}
+
+function getWorldSizeForMode(mode) {
+  return mode === "bomb-pass" ? BOMB_MODE_WORLD_SIZE : WORLD_SIZE;
+}
 
 const TIMER_MODES = {
   PER_FISH: "per-fish",
@@ -2625,15 +2636,72 @@ function drawBombLabel(playerState, timer) {
   ctx.restore();
 }
 
-function prepareCanvasForFrame() {
+function getCameraOrigin(target, worldSize, viewportSize = getViewportSize()) {
+  const half = viewportSize / 2;
+  const targetX = target?.x ?? worldSize / 2;
+  const targetY = target?.y ?? worldSize / 2;
+  const maxOffset = Math.max(worldSize - viewportSize, 0);
+  return {
+    x: clamp(targetX - half, 0, maxOffset),
+    y: clamp(targetY - half, 0, maxOffset)
+  };
+}
+
+function getPlayerDotColor(id) {
+  if (!id) {
+    return "#6dd5fa";
+  }
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) {
+    hash = (hash + id.charCodeAt(i) * (i + 13)) % 360;
+  }
+  return `hsl(${hash} 75% 65%)`;
+}
+
+function drawMinimap(players, walls, worldSize, viewportSize, camera) {
+  const padding = 12;
+  const mapSize = clamp(viewportSize * 0.35, 110, 170);
+  const mapX = viewportSize - mapSize - padding;
+  const mapY = padding;
+  const scale = mapSize / worldSize;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.fillRect(mapX - 6, mapY - 6, mapSize + 12, mapSize + 12);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.fillRect(mapX, mapY, mapSize, mapSize);
+
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  ctx.lineWidth = 1;
+  (walls || []).forEach((wall) => {
+    ctx.strokeRect(mapX + wall.x * scale, mapY + wall.y * scale, wall.width * scale, wall.height * scale);
+  });
+
+  if (camera) {
+    ctx.strokeStyle = "rgba(255, 215, 0, 0.9)";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(mapX + camera.x * scale, mapY + camera.y * scale, viewportSize * scale, viewportSize * scale);
+  }
+
+  players.forEach((player) => {
+    const radius = player.alive ? 4 : 3;
+    ctx.fillStyle = player.alive ? getPlayerDotColor(player.id) : "rgba(200, 200, 200, 0.7)";
+    ctx.beginPath();
+    ctx.arc(mapX + player.x * scale, mapY + player.y * scale, radius, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
+function prepareCanvasForFrame(viewSize = getViewportSize()) {
   const dpr = window.devicePixelRatio || 1;
-  const targetSize = Math.round(WORLD_SIZE * dpr);
+  const targetSize = Math.round(viewSize * dpr);
   if (canvas.width !== targetSize || canvas.height !== targetSize) {
     canvas.width = targetSize;
     canvas.height = targetSize;
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+  ctx.clearRect(0, 0, viewSize, viewSize);
 }
 
 function drawWallsCollection(targetWalls) {
@@ -2946,6 +3014,7 @@ class MultiplayerManager {
     this.reconnectAttempts = 0;
     this.closedByUser = false;
     this.reconnecting = false;
+    this.worldSize = WORLD_SIZE;
   }
 
   async join(roomName, playerName, mode = "classic") {
@@ -2953,6 +3022,7 @@ class MultiplayerManager {
     this.roomName = roomName;
     this.playerName = playerName;
     this.mode = mode || "classic";
+    this.worldSize = getWorldSizeForMode(this.mode);
     this.ready = false;
     this.reconnectEnabled = true;
     this.reconnectAttempts = 0;
@@ -2980,6 +3050,7 @@ class MultiplayerManager {
     this.roomName = "";
     this.playerName = "";
     this.mode = "classic";
+    this.worldSize = WORLD_SIZE;
     this.updateReadyButton();
     this.updateHud();
   }
@@ -3156,6 +3227,7 @@ class MultiplayerManager {
     this.smoothingStartTime = now;
     this.state = nextState;
     this.mode = nextState.mode || this.mode;
+    this.worldSize = getWorldSizeForMode(this.mode);
     const previousPhase = previousState?.phase;
     this.handleStateAudio(previousState, nextState);
     syncMultiplayerStatusEffect(nextState.statusEffect);
@@ -3275,10 +3347,25 @@ class MultiplayerManager {
     }
     const elapsed = performance.now() - this.smoothingStartTime;
     const progress = this.smoothingDuration > 0 ? clamp(elapsed / this.smoothingDuration, 0, 1) : 1;
-    prepareCanvasForFrame();
+    const viewSize = getViewportSize();
+    const worldSize = this.worldSize || WORLD_SIZE;
+    prepareCanvasForFrame(viewSize);
+    let players = [];
+    let fish = null;
     if (this.state) {
-      const players = this.getInterpolatedPlayers(progress);
-      const fish = this.getInterpolatedFish(progress);
+      players = this.getInterpolatedPlayers(progress);
+      fish = this.getInterpolatedFish(progress);
+    }
+
+    let camera = null;
+    if (this.state && this.mode === "bomb-pass") {
+      const focusPlayer = players.find((player) => player.id === this.playerId) || players[0] || null;
+      camera = getCameraOrigin(focusPlayer, worldSize, viewSize);
+      ctx.save();
+      ctx.translate(-camera.x, -camera.y);
+    }
+
+    if (this.state) {
       drawWallsCollection(this.state.walls || []);
       drawMinesCollection(this.state.mines || []);
       drawPowerUpSprite(this.state.powerUp);
@@ -3292,6 +3379,14 @@ class MultiplayerManager {
           drawBombLabel(holder, this.state.bombTimer ?? 0);
         }
       }
+    }
+
+    if (camera) {
+      ctx.restore();
+    }
+
+    if (this.state && this.mode === "bomb-pass") {
+      drawMinimap(players, this.state.walls || [], worldSize, viewSize, camera);
     }
     multiplayerRenderHandle = requestAnimationFrame(this.renderFrameBound);
   }
