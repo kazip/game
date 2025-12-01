@@ -354,6 +354,7 @@ type room struct {
 	mu                 sync.Mutex
 	cancel             chan struct{}
 	tickIndex          uint32
+	bombSlowTimers     map[string]float64
 }
 
 type server struct {
@@ -390,6 +391,10 @@ func (s *server) getOrCreateRoom(name, mode string) *room {
 		return existing
 	}
 	normalizedMode := normalizeMode(mode)
+	world := worldSize
+	if normalizedMode == "bomb-pass" {
+		world = worldSize * bombWorldScale
+	}
 	r := &room{
 		name:             name,
 		players:          make(map[string]*playerState),
@@ -398,12 +403,13 @@ func (s *server) getOrCreateRoom(name, mode string) *room {
 		disconnectTimers: make(map[string]*time.Timer),
 		cancel:           make(chan struct{}),
 		server:           s,
+		bombSlowTimers:   make(map[string]float64),
 	}
 	r.state = gameState{
 		RoomName:   name,
 		Mode:       normalizedMode,
 		Phase:      "lobby",
-		Fish:       fishState{X: worldSize / 2, Y: worldSize / 2, Size: fishSize, Alive: false, Type: "normal", Direction: 1},
+		Fish:       fishState{X: world / 2, Y: world / 2, Size: fishSize, Alive: false, Type: "normal", Direction: 1},
 		PowerUp:    powerUpState{Size: powerUpSize},
 		Remaining:  roundDuration.Seconds(),
 		Message:    "Ожидаем игроков",
@@ -732,7 +738,8 @@ func (r *room) cancelDisconnectTimerLocked(playerID string) {
 func (r *room) ensurePlayer(id, name string) *playerState {
 	player, ok := r.players[id]
 	if !ok {
-		player = &playerState{ID: id, Name: fallbackName(name), Size: catSize, X: worldSize / 2, Y: worldSize / 2, Facing: 1}
+		world := r.currentWorldSize()
+		player = &playerState{ID: id, Name: fallbackName(name), Size: catSize, X: world / 2, Y: world / 2, Facing: 1}
 		r.players[id] = player
 	}
 	if name != "" {
@@ -814,11 +821,12 @@ func (r *room) beginRoundLocked() {
 	r.state.Walls = nil
 	r.state.Mines = nil
 	r.state.PowerUp = powerUpState{Size: powerUpSize}
+	r.bombSlowTimers = make(map[string]float64)
 	if r.isBombMode() {
 		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
 		r.state.PowerUp.Active = false
 		r.state.Mines = nil
-		r.state.Walls = nil
+		r.state.Walls = buildBoundaryWalls(r.currentWorldSize())
 	} else {
 		r.spawnFishLocked()
 	}
@@ -868,12 +876,16 @@ func (r *room) bestPlayerIDLocked() string {
 
 func (r *room) updatePlayersLocked() {
 	speedMultiplier := r.getSpeedMultiplierLocked()
+	world := r.currentWorldSize()
 	for id, p := range r.players {
 		if !p.Alive {
 			continue
 		}
 		input := r.inputs[id]
 		speed := catSpeed * tickRate.Seconds() * speedMultiplier
+		if r.isBombMode() {
+			speed *= r.getBombSpeedMultiplierLocked(id)
+		}
 		p.X += input.X * speed
 		p.Y += input.Y * speed
 		p.Moving = math.Abs(input.X) > 0.01 || math.Abs(input.Y) > 0.01
@@ -886,8 +898,8 @@ func (r *room) updatePlayersLocked() {
 			p.WalkCycle = math.Mod(p.StepAccum, 1)
 		}
 		resolveEntityWallCollisions(p, r.state.Walls)
-		p.X = clampFloat(p.X, p.Size/2, worldSize-p.Size/2)
-		p.Y = clampFloat(p.Y, p.Size/2, worldSize-p.Size/2)
+		p.X = clampFloat(p.X, p.Size/2, world-p.Size/2)
+		p.Y = clampFloat(p.Y, p.Size/2, world-p.Size/2)
 
 		if r.state.PowerUp.Active {
 			dist := math.Hypot(p.X-r.state.PowerUp.X, p.Y-r.state.PowerUp.Y)
@@ -904,6 +916,10 @@ func (r *room) updatePlayersLocked() {
 				break
 			}
 		}
+	}
+
+	if r.isBombMode() {
+		r.resolvePlayerCollisionsLocked()
 	}
 }
 
@@ -931,6 +947,82 @@ func (r *room) isBombMode() bool {
 	return r.state.Mode == "bomb-pass"
 }
 
+func (r *room) currentWorldSize() float64 {
+	if r.isBombMode() {
+		return worldSize * bombWorldScale
+	}
+	return worldSize
+}
+
+func (r *room) applyBombSlowdownLocked(playerID string) {
+	if !r.isBombMode() {
+		return
+	}
+	r.bombSlowTimers[playerID] = bombSlowDuration
+}
+
+func (r *room) tickBombSlowdownsLocked() {
+	if len(r.bombSlowTimers) == 0 {
+		return
+	}
+	for id, remaining := range r.bombSlowTimers {
+		remaining -= tickRate.Seconds()
+		if remaining <= 0 {
+			delete(r.bombSlowTimers, id)
+		} else {
+			r.bombSlowTimers[id] = remaining
+		}
+	}
+}
+
+func (r *room) getBombSpeedMultiplierLocked(playerID string) float64 {
+	remaining, ok := r.bombSlowTimers[playerID]
+	if ok && remaining > 0 {
+		return bombSlowFactor
+	}
+	return 1
+}
+
+func (r *room) resolvePlayerCollisionsLocked() {
+	players := r.alivePlayersLocked()
+	world := r.currentWorldSize()
+	for i := 0; i < len(players); i++ {
+		for j := i + 1; j < len(players); j++ {
+			a := players[i]
+			b := players[j]
+			dx := b.X - a.X
+			dy := b.Y - a.Y
+			dist := math.Hypot(dx, dy)
+			minDist := (a.Size + b.Size) / 2
+			if minDist <= 0 {
+				continue
+			}
+			if dist >= minDist {
+				continue
+			}
+			if dist == 0 {
+				dx = 1
+				dy = 0
+				dist = 1
+			}
+			nx := dx / dist
+			ny := dy / dist
+			overlap := minDist - dist
+			push := overlap / 2
+			a.X -= nx * push
+			a.Y -= ny * push
+			b.X += nx * push
+			b.Y += ny * push
+		}
+	}
+
+	for _, p := range players {
+		resolveEntityWallCollisions(p, r.state.Walls)
+		p.X = clampFloat(p.X, p.Size/2, world-p.Size/2)
+		p.Y = clampFloat(p.Y, p.Size/2, world-p.Size/2)
+	}
+}
+
 func (r *room) assignBombToRandomAliveLocked(resetTimer bool) {
 	alive := r.alivePlayersLocked()
 	if len(alive) == 0 {
@@ -942,6 +1034,7 @@ func (r *room) assignBombToRandomAliveLocked(resetTimer bool) {
 	if resetTimer {
 		r.state.BombTimer = bombTimerDuration
 	}
+	r.applyBombSlowdownLocked(picked.ID)
 	r.state.Message = fmt.Sprintf("Бомба у %s!", fallbackName(picked.Name))
 }
 
@@ -957,7 +1050,8 @@ func (r *room) handleBombTransferLocked() {
 		dist := math.Hypot(holder.X-p.X, holder.Y-p.Y)
 		if dist <= (holder.Size+p.Size)/2 {
 			r.state.BombHolder = p.ID
-			r.state.BombTimer = bombTimerDuration
+			r.state.BombTimer = math.Max(r.state.BombTimer, 0) + bombTimerBonus
+			r.applyBombSlowdownLocked(p.ID)
 			r.state.Message = fmt.Sprintf("%s передал бомбу %s", fallbackName(holder.Name), fallbackName(p.Name))
 			return
 		}
@@ -969,6 +1063,7 @@ func (r *room) updateBombPassLocked() {
 		r.endRoundLocked("Раунд завершён")
 		return
 	}
+	r.tickBombSlowdownsLocked()
 	holder, exists := r.players[r.state.BombHolder]
 	if r.state.BombHolder == "" || !exists || holder == nil || !holder.Alive {
 		r.assignBombToRandomAliveLocked(true)
@@ -1015,7 +1110,8 @@ func (r *room) updateFishLocked() {
 			nextX = r.state.Fish.X
 		}
 	}
-	r.state.Fish.X = clampFloat(nextX, r.state.Fish.Size/2, worldSize-r.state.Fish.Size/2)
+	world := r.currentWorldSize()
+	r.state.Fish.X = clampFloat(nextX, r.state.Fish.Size/2, world-r.state.Fish.Size/2)
 
 	for _, p := range r.players {
 		if !p.Alive {
@@ -1090,9 +1186,10 @@ func (r *room) spawnFishLocked() {
 	}
 
 	placed := false
+	world := r.currentWorldSize()
 	for attempt := 0; attempt < 200; attempt++ {
-		x := margin + rand.Float64()*(worldSize-margin*2)
-		y := margin + rand.Float64()*(worldSize-margin*2)
+		x := margin + rand.Float64()*(world-margin*2)
+		y := margin + rand.Float64()*(world-margin*2)
 		fishCell := positionToGridCell(x, y)
 		if containsCell(catCells, fishCell) {
 			continue
@@ -1124,8 +1221,8 @@ func (r *room) spawnFishLocked() {
 		r.state.Walls = nil
 		r.handlePowerUpAfterWallChangeLocked()
 		r.resolvePlayersAfterWallChangeLocked()
-		fish.X = worldSize / 2
-		fish.Y = worldSize / 2
+		fish.X = world / 2
+		fish.Y = world / 2
 		fish.Alive = true
 		fish.Size = fishSize
 		fish.Type = "normal"
@@ -1221,9 +1318,10 @@ func (r *room) clearPowerUpLocked() {
 
 func (r *room) spawnPowerUpLocked() {
 	margin := 36.0
+	world := r.currentWorldSize()
 	for attempt := 0; attempt < 40; attempt++ {
-		x := margin + rand.Float64()*(worldSize-margin*2)
-		y := margin + rand.Float64()*(worldSize-margin*2)
+		x := margin + rand.Float64()*(world-margin*2)
+		y := margin + rand.Float64()*(world-margin*2)
 		if !circleIntersectsAnyWall(x, y, r.state.PowerUp.Size/2+2, r.state.Walls) {
 			r.state.PowerUp.X = x
 			r.state.PowerUp.Y = y
@@ -1246,10 +1344,11 @@ func (r *room) refreshPowerUpLocked() {
 }
 
 func (r *room) resolvePlayersAfterWallChangeLocked() {
+	world := r.currentWorldSize()
 	for _, p := range r.players {
 		resolveEntityWallCollisions(p, r.state.Walls)
-		p.X = clampFloat(p.X, p.Size/2, worldSize-p.Size/2)
-		p.Y = clampFloat(p.Y, p.Size/2, worldSize-p.Size/2)
+		p.X = clampFloat(p.X, p.Size/2, world-p.Size/2)
+		p.Y = clampFloat(p.Y, p.Size/2, world-p.Size/2)
 	}
 }
 
@@ -1374,10 +1473,11 @@ func (r *room) generateMinesLocked() []mine {
 	margin := radius + mineMinDistance + 4
 	attempts := 0
 
+	world := r.currentWorldSize()
 	for len(result) < mineCount && attempts < 200 {
 		attempts++
-		x := margin + rand.Float64()*(worldSize-margin*2)
-		y := margin + rand.Float64()*(worldSize-margin*2)
+		x := margin + rand.Float64()*(world-margin*2)
+		y := margin + rand.Float64()*(world-margin*2)
 		if !r.isMinePositionValidLocked(x, y, radius, result) {
 			continue
 		}
@@ -1388,7 +1488,8 @@ func (r *room) generateMinesLocked() []mine {
 
 func (r *room) isMinePositionValidLocked(x, y, radius float64, existing []mine) bool {
 	safeRadius := radius + mineMinDistance
-	if x-safeRadius < 0 || y-safeRadius < 0 || x+safeRadius > worldSize || y+safeRadius > worldSize {
+	world := r.currentWorldSize()
+	if x-safeRadius < 0 || y-safeRadius < 0 || x+safeRadius > world || y+safeRadius > world {
 		return false
 	}
 	if circleIntersectsAnyWall(x, y, safeRadius, r.state.Walls) {
@@ -1528,6 +1629,16 @@ func convertSegmentsToWalls(segments []wallSegment) []wall {
 	return walls
 }
 
+func buildBoundaryWalls(world float64) []wall {
+	thickness := wallThickness
+	return []wall{
+		{X: 0, Y: 0, Width: world, Height: thickness},
+		{X: 0, Y: world - thickness, Width: world, Height: thickness},
+		{X: 0, Y: 0, Width: thickness, Height: world},
+		{X: world - thickness, Y: 0, Width: thickness, Height: world},
+	}
+}
+
 func circleIntersectsRect(cx, cy, radius float64, rect wall) bool {
 	closestX := clampFloat(cx, rect.X, rect.X+rect.Width)
 	closestY := clampFloat(cy, rect.Y, rect.Y+rect.Height)
@@ -1547,7 +1658,8 @@ func circleIntersectsAnyWall(cx, cy, radius float64, walls []wall) bool {
 
 func (r *room) fishCollidesAt(x float64) bool {
 	radius := r.state.Fish.Size / 2
-	if x-radius < 0 || x+radius > worldSize {
+	world := r.currentWorldSize()
+	if x-radius < 0 || x+radius > world {
 		return true
 	}
 	if circleIntersectsAnyWall(x, r.state.Fish.Y, radius, r.state.Walls) {

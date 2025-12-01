@@ -4,6 +4,7 @@ import "time"
 
 const (
 	worldSize         = 500.0
+	bombWorldScale    = 5.0
 	catSpeed          = 180.0
 	catSize           = 36.0
 	fishSize          = 28.0
@@ -27,6 +28,9 @@ const (
 	timeIncreaseLimit = 15.0
 	timeDecreaseLimit = 5.0
 	bombTimerDuration = 12.0
+	bombSlowDuration  = 1.0
+	bombSlowFactor    = 0.6
+	bombTimerBonus    = 2.0
 	dataFileName      = "data.json"
 	reconnectGrace    = 10 * time.Second
 )
