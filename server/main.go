@@ -2,15 +2,17 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"net/http"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
 	"catgame/protocol"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -188,82 +190,12 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 	return protoPatch
 }
 
-func statusEqual(a, b *statusEffect) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return a.Type == b.Type && !floatChanged(a.Remaining, b.Remaining)
-}
-
-func fishEqual(a, b fishState) bool {
-	return !floatChanged(a.X, b.X) && !floatChanged(a.Y, b.Y) && !floatChanged(a.Size, b.Size) && a.Alive == b.Alive && a.Type == b.Type && a.Direction == b.Direction && a.Spawned == b.Spawned
-}
-
-func powerUpEqual(a, b powerUpState) bool {
-	return !floatChanged(a.X, b.X) && !floatChanged(a.Y, b.Y) && !floatChanged(a.Size, b.Size) && !floatChanged(a.Remaining, b.Remaining) && a.Active == b.Active && a.Type == b.Type
-}
-
-func wallsEqual(a, b []wall) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if floatChanged(a[i].X, b[i].X) || floatChanged(a[i].Y, b[i].Y) || floatChanged(a[i].Width, b[i].Width) || floatChanged(a[i].Height, b[i].Height) {
-			return false
-		}
-	}
-	return true
-}
-
-func minesEqual(a, b []mine) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if floatChanged(a[i].X, b[i].X) || floatChanged(a[i].Y, b[i].Y) || floatChanged(a[i].Size, b[i].Size) {
-			return false
-		}
-	}
-	return true
-}
-
-func appearanceEqual(a, b *playerState) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return stringifyAppearance(a.Appearance) == stringifyAppearance(b.Appearance)
-}
-
-func cloneWalls(src []wall) []wall {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make([]wall, len(src))
-	copy(dst, src)
-	return dst
-}
-
-func cloneMines(src []mine) []mine {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make([]mine, len(src))
-	copy(dst, src)
-	return dst
-}
-
 func (r *room) snapshotLocked() gameState {
 	stateCopy := r.state
 	players := make([]*playerState, 0, len(r.players))
 	for _, p := range r.players {
-		copy := *p
-		players = append(players, &copy)
+		cp := *p
+		players = append(players, &cp)
 	}
 	stateCopy.Players = players
 	stateCopy.Walls = cloneWalls(r.state.Walls)
@@ -1544,87 +1476,6 @@ func entityIntersectsWalls(entity *playerState, walls []wall) bool {
 		}
 	}
 	return false
-}
-
-func cellKey(c gridCell) string {
-	return fmt.Sprintf("%d,%d", c.Row, c.Col)
-}
-
-func containsCell(cells []gridCell, target gridCell) bool {
-	for _, c := range cells {
-		if c.Row == target.Row && c.Col == target.Col {
-			return true
-		}
-	}
-	return false
-}
-
-func stringifyAppearance(app catAppearance) string {
-	if len(app) == 0 {
-		return ""
-	}
-
-	keys := make([]string, 0, len(app))
-	for key := range app {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	var buf bytes.Buffer
-	buf.WriteByte('{')
-	for i, key := range keys {
-		if i > 0 {
-			buf.WriteByte(',')
-		}
-		keyJSON, _ := json.Marshal(key)
-		buf.Write(keyJSON)
-		buf.WriteByte(':')
-		valueJSON, _ := json.Marshal(app[key])
-		buf.Write(valueJSON)
-	}
-	buf.WriteByte('}')
-
-	return buf.String()
-}
-
-func clampFloat(v, min, max float64) float64 {
-	if v < min {
-		return min
-	}
-	if v > max {
-		return max
-	}
-	return v
-}
-
-func fallbackName(name string) string {
-	if name == "" {
-		return "Игрок"
-	}
-	if len(name) > 32 {
-		return name[:32]
-	}
-	return name
-}
-
-func writeJSON(w http.ResponseWriter, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(payload)
-}
-
-func withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }
 
 func main() {
