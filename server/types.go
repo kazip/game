@@ -35,7 +35,7 @@ const (
 	bombTimerDuration     = 30.0
 	bombSlowDuration      = 1.0
 	bombSlowFactor        = 0.6
-	bombTimerBonus        = 2.0
+	bombTimerBonus        = 10.0
 	dataFileName          = "data.json"
 	reconnectGrace        = 10 * time.Second
 )
