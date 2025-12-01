@@ -248,6 +248,7 @@ export function encodeStateToBase64(state) {
   const statusType = state.statusEffect?.type || "";
   writer.writeString(statusType);
   writer.writeFloat32(state.statusEffect?.remaining || 0);
+  writer.writeString(state.statusEffect?.playerId || "");
 
   const fishTypeCode = FISH_TYPE_CODES[state.fish?.type] ?? 0;
   writer.writeUint8(fishTypeCode);
@@ -331,6 +332,7 @@ function decodeFullState(reader) {
   const bombTimer = reader.readFloat32();
   const statusType = reader.readString();
   const statusRemaining = reader.readFloat32();
+  const statusPlayerId = reader.readString();
   const fishType = reader.readUint8();
   const fish = {
     type: Object.keys(FISH_TYPE_CODES).find((key) => FISH_TYPE_CODES[key] === fishType) || "normal",
@@ -369,7 +371,9 @@ function decodeFullState(reader) {
       bombTimer,
       winnerId: winnerId || null,
       goldenChainActive,
-      statusEffect: statusType ? { type: statusType, remaining: statusRemaining } : null,
+      statusEffect: statusType
+        ? { type: statusType, remaining: statusRemaining, playerId: statusPlayerId || undefined }
+        : null,
       fish,
       powerUp,
       walls,
@@ -398,7 +402,10 @@ function decodePatch(reader) {
   if (flags1 & (1 << 6)) {
     const statusType = reader.readString();
     const statusRemaining = reader.readFloat32();
-    patch.statusEffect = statusType ? { type: statusType, remaining: statusRemaining } : null;
+    const statusPlayerId = reader.readString();
+    patch.statusEffect = statusType
+      ? { type: statusType, remaining: statusRemaining, playerId: statusPlayerId || undefined }
+      : null;
   }
   if (flags1 & (1 << 7)) {
     const fishType = reader.readUint8();

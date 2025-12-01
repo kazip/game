@@ -932,7 +932,8 @@ function setDisplayedStatusEffect(effect) {
   if (effect && STATUS_EFFECTS[effect.type]) {
     displayedStatusEffect = {
       type: effect.type,
-      remaining: effect.remaining ?? 0
+      remaining: effect.remaining ?? 0,
+      playerId: effect.playerId
     };
   } else {
     displayedStatusEffect = null;
@@ -941,11 +942,21 @@ function setDisplayedStatusEffect(effect) {
 }
 
 function syncMultiplayerStatusEffect(effect) {
-  if (effect && STATUS_EFFECTS[effect.type]) {
+  if (isStatusEffectRelevant(effect)) {
     setDisplayedStatusEffect(effect);
   } else {
     setDisplayedStatusEffect(null);
   }
+}
+
+function isStatusEffectRelevant(effect) {
+  if (!effect || !STATUS_EFFECTS[effect.type]) {
+    return false;
+  }
+  if (effect.playerId && effect.playerId !== playerId) {
+    return false;
+  }
+  return true;
 }
 
 function getCatSpeedMultiplier() {

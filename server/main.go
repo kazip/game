@@ -98,7 +98,7 @@ func toProtocolGameState(state gameState) protocol.GameState {
 	}
 	var status *protocol.StatusEffect
 	if state.Status != nil {
-		status = &protocol.StatusEffect{Type: state.Status.Type, Remaining: state.Status.Remaining}
+		status = &protocol.StatusEffect{Type: state.Status.Type, Remaining: state.Status.Remaining, PlayerID: state.Status.PlayerID}
 	}
 
 	return protocol.GameState{
@@ -161,7 +161,7 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 	protoPatch.WinnerID = patch.WinnerID
 	protoPatch.Golden = patch.Golden
 	if patch.Status != nil {
-		protoPatch.Status = &protocol.StatusEffect{Type: patch.Status.Type, Remaining: patch.Status.Remaining}
+		protoPatch.Status = &protocol.StatusEffect{Type: patch.Status.Type, Remaining: patch.Status.Remaining, PlayerID: patch.Status.PlayerID}
 	}
 	if patch.Fish != nil {
 		fish := protocol.FishState(*patch.Fish)
@@ -796,6 +796,7 @@ func (r *room) step() {
 		r.updateStatusEffectLocked()
 		if r.isBombMode() {
 			r.updatePlayersLocked()
+			r.updateBombPowerUpLocked()
 			r.updateBombPassLocked()
 		} else {
 			r.state.Remaining -= tickRate.Seconds()
@@ -879,7 +880,7 @@ func (r *room) bestPlayerIDLocked() string {
 }
 
 func (r *room) updatePlayersLocked() {
-	speedMultiplier := r.getSpeedMultiplierLocked()
+	speedMultiplier := r.getSpeedMultiplierLocked(p.ID)
 	world := r.currentWorldSize()
 	for id, p := range r.players {
 		if !p.Alive {
@@ -910,7 +911,11 @@ func (r *room) updatePlayersLocked() {
 			if dist < (p.Size+r.state.PowerUp.Size)/2 {
 				r.state.PowerUp.Active = false
 				r.state.PowerUp.Remaining = 0
-				r.applyRandomStatusEffectLocked()
+				ownerID := ""
+				if r.isBombMode() {
+					ownerID = p.ID
+				}
+				r.applyRandomStatusEffectLocked(ownerID)
 			}
 		}
 		for _, m := range r.state.Mines {
@@ -1194,8 +1199,11 @@ func (r *room) updateStatusEffectLocked() {
 	}
 }
 
-func (r *room) getSpeedMultiplierLocked() float64 {
+func (r *room) getSpeedMultiplierLocked(playerID string) float64 {
 	if r.state.Status == nil {
+		return 1
+	}
+	if r.state.Status.PlayerID != "" && r.state.Status.PlayerID != playerID {
 		return 1
 	}
 	switch r.state.Status.Type {
@@ -1339,17 +1347,22 @@ func (r *room) broadcastChat(msg chatMessage) {
 	}
 }
 
-func (r *room) applyRandomStatusEffectLocked() {
+func (r *room) applyRandomStatusEffectLocked(ownerID string) {
 	effects := []string{"speedUp", "speedDown", "timeIncrease", "timeDecrease"}
+	if r.isBombMode() || ownerID != "" {
+		effects = []string{"speedUp", "speedDown"}
+	}
 	if len(effects) == 0 {
 		return
 	}
 	typeChoice := effects[rand.Intn(len(effects))]
-	r.state.Status = &statusEffect{Type: typeChoice, Remaining: powerUpDuration}
-	if typeChoice == "timeIncrease" {
-		r.state.Remaining = math.Max(r.state.Remaining, timeIncreaseLimit)
-	} else if typeChoice == "timeDecrease" {
-		r.state.Remaining = math.Min(r.state.Remaining, timeDecreaseLimit)
+	r.state.Status = &statusEffect{Type: typeChoice, Remaining: powerUpDuration, PlayerID: ownerID}
+	if ownerID == "" {
+		if typeChoice == "timeIncrease" {
+			r.state.Remaining = math.Max(r.state.Remaining, timeIncreaseLimit)
+		} else if typeChoice == "timeDecrease" {
+			r.state.Remaining = math.Min(r.state.Remaining, timeDecreaseLimit)
+		}
 	}
 }
 
@@ -1384,6 +1397,23 @@ func (r *room) refreshPowerUpLocked() {
 		r.state.PowerUp.Remaining = math.Min(r.state.PowerUp.Remaining, powerUpLifetime)
 	} else {
 		r.clearPowerUpLocked()
+	}
+}
+
+func (r *room) updateBombPowerUpLocked() {
+	if !r.isBombMode() {
+		return
+	}
+	if r.state.PowerUp.Active {
+		r.state.PowerUp.Remaining -= tickRate.Seconds()
+		if r.state.PowerUp.Remaining <= 0 {
+			r.clearPowerUpLocked()
+		}
+		return
+	}
+
+	if rand.Float64() < powerUpChance*tickRate.Seconds()*3 {
+		r.spawnPowerUpLocked()
 	}
 }
 
