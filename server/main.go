@@ -1485,7 +1485,7 @@ func (r *room) buildRandomWallSegments(catCells []gridCell, fishCell gridCell) [
 
 	for totalLength < maxLength && attempts < 80 {
 		attempts++
-		if len(segments) >= 2 && rand.Float64() < 0.35 {
+		if len(segments) >= r.maxSegments() && rand.Float64() < 0.35 {
 			break
 		}
 		remaining := maxLength - totalLength
