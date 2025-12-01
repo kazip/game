@@ -3378,6 +3378,11 @@ class MultiplayerManager {
       this.stopRenderLoop();
       return;
     }
+
+    // Ensure fresh input is sent even if key events were missed while switching overlays
+    // or when the tab regained focus mid-round.
+    this.updateInputFromControls();
+
     const elapsed = performance.now() - this.smoothingStartTime;
     const progress = this.smoothingDuration > 0 ? clamp(elapsed / this.smoothingDuration, 0, 1) : 1;
     const viewSize = getViewportSize();
