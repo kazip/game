@@ -958,6 +958,20 @@ func (r *room) currentWorldSize() float64 {
 	return worldSize
 }
 
+func (r *room) wallThicknessRate() float64 {
+	if r.isBombMode() {
+		return bombWallThicknessRate
+	}
+	return wallThicknessRate
+}
+
+func (r *room) maxWallTotalLen() int {
+	if r.isBombMode() {
+		return bombMaxWallTotalLen
+	}
+	return maxWallTotalLen
+}
+
 func (r *room) applyBombSlowdownLocked(playerID string) {
 	if !r.isBombMode() {
 		return
@@ -1383,7 +1397,7 @@ func (r *room) handlePowerUpAfterWallChangeLocked() {
 
 func (r *room) buildBombPassArenaLocked() {
 	world := r.currentWorldSize()
-	layout := buildBoundaryWalls(world)
+	layout := r.buildBoundaryWalls(world)
 
 	players := make([]*playerState, 0, len(r.players))
 	for _, p := range r.players {
@@ -1433,7 +1447,7 @@ func (r *room) generateWallsLayoutForPlayers(catCells []gridCell, fishCell gridC
 		if !allReachable {
 			continue
 		}
-		candidateWalls := convertSegmentsToWalls(segments, r.currentWorldSize())
+		candidateWalls := convertSegmentsToWalls(segments, r.currentWorldSize(), r.wallThicknessRate())
 		intersectsPlayer := false
 		for _, p := range r.players {
 			if entityIntersectsWalls(p, candidateWalls) {
@@ -1460,12 +1474,14 @@ func (r *room) buildRandomWallSegments(catCells []gridCell, fishCell gridCell) [
 		catKeys[cellKey(c)] = struct{}{}
 	}
 
-	for totalLength < maxWallTotalLen && attempts < 80 {
+	maxLength := r.maxWallTotalLen()
+
+	for totalLength < maxLength && attempts < 80 {
 		attempts++
 		if len(segments) >= 2 && rand.Float64() < 0.35 {
 			break
 		}
-		remaining := maxWallTotalLen - totalLength
+		remaining := maxLength - totalLength
 		if remaining <= 0 {
 			continue
 		}
@@ -1663,10 +1679,10 @@ func isPathAvailable(catCell, fishCell gridCell, blocked [][]bool) bool {
 	return false
 }
 
-func convertSegmentsToWalls(segments []wallSegment, world float64) []wall {
+func convertSegmentsToWalls(segments []wallSegment, world float64, thicknessRate float64) []wall {
 	walls := make([]wall, 0, len(segments))
 	cellSize := world / gridSize
-	thickness := cellSize * wallThicknessRate
+	thickness := cellSize * thicknessRate
 	for _, seg := range segments {
 		if seg.Orientation == "horizontal" {
 			walls = append(walls, wall{
@@ -1687,8 +1703,8 @@ func convertSegmentsToWalls(segments []wallSegment, world float64) []wall {
 	return walls
 }
 
-func buildBoundaryWalls(world float64) []wall {
-	thickness := (world / gridSize) * wallThicknessRate
+func (r *room) buildBoundaryWalls(world float64) []wall {
+	thickness := (world / gridSize) * r.wallThicknessRate()
 	return []wall{
 		{X: 0, Y: 0, Width: world, Height: thickness},
 		{X: 0, Y: world - thickness, Width: world, Height: thickness},
