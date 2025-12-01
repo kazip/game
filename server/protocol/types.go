@@ -30,6 +30,7 @@ type PowerUpState struct {
 type StatusEffect struct {
 	Type      string  `json:"type"`
 	Remaining float64 `json:"remaining"`
+	PlayerID  string  `json:"playerId,omitempty"`
 }
 
 type FishState struct {

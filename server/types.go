@@ -132,6 +132,7 @@ type powerUpState struct {
 type statusEffect struct {
 	Type      string  `json:"type"`
 	Remaining float64 `json:"remaining"`
+	PlayerID  string  `json:"playerId,omitempty"`
 }
 
 type gridCell struct {

@@ -53,7 +53,7 @@ func statusEqual(a, b *statusEffect) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	return a.Type == b.Type && !floatChanged(a.Remaining, b.Remaining)
+	return a.Type == b.Type && a.PlayerID == b.PlayerID && !floatChanged(a.Remaining, b.Remaining)
 }
 
 func fishEqual(a, b fishState) bool {

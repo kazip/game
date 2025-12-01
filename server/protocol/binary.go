@@ -205,12 +205,15 @@ func EncodeState(state GameState) []byte {
 
 	statusType := ""
 	statusRemaining := float32(0)
+	statusPlayer := ""
 	if state.Status != nil {
 		statusType = state.Status.Type
 		statusRemaining = float32(state.Status.Remaining)
+		statusPlayer = state.Status.PlayerID
 	}
 	writer.writeString(statusType)
 	writer.writeFloat32(statusRemaining)
+	writer.writeString(statusPlayer)
 
 	writer.writeUint8(fishTypeCodes[state.Fish.Type])
 	writer.writeFloat32(float32(state.Fish.X))
@@ -402,6 +405,7 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 	if patch.Status != nil {
 		writer.writeString(patch.Status.Type)
 		writer.writeFloat32(float32(patch.Status.Remaining))
+		writer.writeString(patch.Status.PlayerID)
 	}
 	if patch.Fish != nil {
 		writer.writeUint8(fishTypeCodes[patch.Fish.Type])
