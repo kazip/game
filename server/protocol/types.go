@@ -73,7 +73,7 @@ type GameState struct {
 	Walls      []Wall         `json:"walls"`
 	Mines      []Mine         `json:"mines"`
 	PowerUp    PowerUpState   `json:"powerUp"`
-	PowerUps   []PowerUpState `json:"powerUps,omitempty"`
+	PowerUps   []PowerUpState `json:"powerUps"`
 	Status     *StatusEffect  `json:"statusEffect"`
 	WinnerID   string         `json:"winnerId"`
 	Golden     bool           `json:"goldenChainActive"`
@@ -110,7 +110,7 @@ type StatePatch struct {
 	Status         *StatusEffect  `json:"statusEffect,omitempty"`
 	Fish           *FishState     `json:"fish,omitempty"`
 	PowerUp        *PowerUpState  `json:"powerUp,omitempty"`
-	PowerUps       []PowerUpState `json:"powerUps,omitempty"`
+	PowerUps       []PowerUpState `json:"powerUps"`
 	Walls          []Wall         `json:"walls,omitempty"`
 	Mines          []Mine         `json:"mines,omitempty"`
 	Players        []PlayerPatch  `json:"players,omitempty"`

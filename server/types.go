@@ -29,6 +29,7 @@ const (
 	powerUpSize           = 34.0
 	powerUpChance         = 0.05
 	powerUpLifetime       = 5.0
+	bombPowerUpLifetime   = 30.0
 	powerUpDuration       = 30.0
 	timeIncreaseLimit     = 15.0
 	timeDecreaseLimit     = 5.0

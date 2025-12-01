@@ -2984,7 +2984,8 @@ function applyMultiplayerStatePatch(previousState, patch) {
     nextState.winnerId = patch.winnerId;
   }
   if (patch.statusEffect !== undefined) {
-    nextState.statusEffect = patch.statusEffect || null;
+    const effect = patch.statusEffect;
+    nextState.statusEffect = effect && effect.type ? effect : null;
   }
   if (patch.fish) {
     nextState.fish = { ...previousState.fish, ...patch.fish };
