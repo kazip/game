@@ -226,6 +226,7 @@ func (r *room) snapshotLocked() gameState {
 	stateCopy.Players = players
 	stateCopy.Walls = cloneWalls(r.state.Walls)
 	stateCopy.Mines = cloneMines(r.state.Mines)
+	stateCopy.PowerUps = clonePowerUps(r.state.PowerUps)
 	return stateCopy
 }
 
