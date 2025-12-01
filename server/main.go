@@ -30,6 +30,12 @@ func quantizeStateForSend(state *gameState) {
 	state.PowerUp.Y = quantizeCoord(state.PowerUp.Y)
 	state.PowerUp.Size = quantizeCoord(state.PowerUp.Size)
 	state.PowerUp.Remaining = quantizeSeconds(state.PowerUp.Remaining)
+	for i := range state.PowerUps {
+		state.PowerUps[i].X = quantizeCoord(state.PowerUps[i].X)
+		state.PowerUps[i].Y = quantizeCoord(state.PowerUps[i].Y)
+		state.PowerUps[i].Size = quantizeCoord(state.PowerUps[i].Size)
+		state.PowerUps[i].Remaining = quantizeSeconds(state.PowerUps[i].Remaining)
+	}
 
 	if state.Status != nil {
 		state.Status.Remaining = quantizeSeconds(state.Status.Remaining)
@@ -96,6 +102,10 @@ func toProtocolGameState(state gameState) protocol.GameState {
 	for i, m := range state.Mines {
 		mines[i] = protocol.Mine{X: m.X, Y: m.Y, Size: m.Size}
 	}
+	powerUps := make([]protocol.PowerUpState, len(state.PowerUps))
+	for i, p := range state.PowerUps {
+		powerUps[i] = protocol.PowerUpState(p)
+	}
 	var status *protocol.StatusEffect
 	if state.Status != nil {
 		status = &protocol.StatusEffect{Type: state.Status.Type, Remaining: state.Status.Remaining, PlayerID: state.Status.PlayerID}
@@ -115,6 +125,7 @@ func toProtocolGameState(state gameState) protocol.GameState {
 		Walls:      walls,
 		Mines:      mines,
 		PowerUp:    protocol.PowerUpState(state.PowerUp),
+		PowerUps:   powerUps,
 		Status:     status,
 		WinnerID:   state.WinnerID,
 		Golden:     state.Golden,
@@ -170,6 +181,13 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 	if patch.PowerUp != nil {
 		power := protocol.PowerUpState(*patch.PowerUp)
 		protoPatch.PowerUp = &power
+	}
+	if len(patch.PowerUps) > 0 {
+		powerUps := make([]protocol.PowerUpState, len(patch.PowerUps))
+		for i, p := range patch.PowerUps {
+			powerUps[i] = protocol.PowerUpState(p)
+		}
+		protoPatch.PowerUps = powerUps
 	}
 	if len(patch.Walls) > 0 {
 		walls := make([]protocol.Wall, len(patch.Walls))
@@ -263,7 +281,7 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 }
 
 func (p *statePatch) isEmpty() bool {
-	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.Message == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
+	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.Message == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.PowerUps) == 0 && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
 }
 
 func buildStatePatch(previous, current gameState) *statePatch {
@@ -306,6 +324,9 @@ func buildStatePatch(previous, current gameState) *statePatch {
 	if !powerUpEqual(previous.PowerUp, current.PowerUp) {
 		powerCopy := current.PowerUp
 		patch.PowerUp = &powerCopy
+	}
+	if !powerUpSlicesEqual(previous.PowerUps, current.PowerUps) {
+		patch.PowerUps = clonePowerUps(current.PowerUps)
 	}
 	if !wallsEqual(previous.Walls, current.Walls) {
 		patch.Walls = cloneWalls(current.Walls)
@@ -358,6 +379,7 @@ type room struct {
 	lastBombPassFrom   string
 	lastBombPassTo     string
 	lastBombPassAt     time.Time
+	bombPowerUpTimer   float64
 }
 
 type server struct {
@@ -407,6 +429,7 @@ func (s *server) getOrCreateRoom(name, mode string) *room {
 		cancel:           make(chan struct{}),
 		server:           s,
 		bombSlowTimers:   make(map[string]float64),
+		bombPowerUpTimer: bombPowerUpInterval,
 	}
 	r.state = gameState{
 		RoomName:   name,
@@ -414,6 +437,7 @@ func (s *server) getOrCreateRoom(name, mode string) *room {
 		Phase:      "lobby",
 		Fish:       fishState{X: world / 2, Y: world / 2, Size: fishSize, Alive: false, Type: "normal", Direction: 1},
 		PowerUp:    powerUpState{Size: powerUpSize},
+		PowerUps:   nil,
 		Remaining:  roundDuration.Seconds(),
 		Message:    "Ожидаем игроков",
 		ServerTime: time.Now().UnixMilli(),
@@ -830,8 +854,10 @@ func (r *room) beginRoundLocked() {
 	if r.isBombMode() {
 		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
 		r.state.PowerUp.Active = false
+		r.state.PowerUps = nil
 		r.state.Mines = nil
 		r.buildBombPassArenaLocked()
+		r.bombPowerUpTimer = bombPowerUpInterval
 	} else {
 		r.spawnFishLocked()
 	}
@@ -880,12 +906,12 @@ func (r *room) bestPlayerIDLocked() string {
 }
 
 func (r *room) updatePlayersLocked() {
-	speedMultiplier := r.getSpeedMultiplierLocked(p.ID)
 	world := r.currentWorldSize()
 	for id, p := range r.players {
 		if !p.Alive {
 			continue
 		}
+		speedMultiplier := r.getSpeedMultiplierLocked(p.ID)
 		input := r.inputs[id]
 		speed := catSpeed * tickRate.Seconds() * speedMultiplier
 		if r.isBombMode() {
@@ -906,16 +932,14 @@ func (r *room) updatePlayersLocked() {
 		p.X = clampFloat(p.X, p.Size/2, world-p.Size/2)
 		p.Y = clampFloat(p.Y, p.Size/2, world-p.Size/2)
 
-		if r.state.PowerUp.Active {
+		if r.isBombMode() {
+			r.collectBombPowerUpsLocked(p)
+		} else if r.state.PowerUp.Active {
 			dist := math.Hypot(p.X-r.state.PowerUp.X, p.Y-r.state.PowerUp.Y)
 			if dist < (p.Size+r.state.PowerUp.Size)/2 {
 				r.state.PowerUp.Active = false
 				r.state.PowerUp.Remaining = 0
-				ownerID := ""
-				if r.isBombMode() {
-					ownerID = p.ID
-				}
-				r.applyRandomStatusEffectLocked(ownerID)
+				r.applyRandomStatusEffectLocked("")
 			}
 		}
 		for _, m := range r.state.Mines {
@@ -1400,21 +1424,66 @@ func (r *room) refreshPowerUpLocked() {
 	}
 }
 
+func (r *room) collectBombPowerUpsLocked(player *playerState) {
+	if player == nil || len(r.state.PowerUps) == 0 {
+		return
+	}
+
+	for i := len(r.state.PowerUps) - 1; i >= 0; i-- {
+		pu := r.state.PowerUps[i]
+		if !pu.Active {
+			r.state.PowerUps = append(r.state.PowerUps[:i], r.state.PowerUps[i+1:]...)
+			continue
+		}
+
+		dist := math.Hypot(player.X-pu.X, player.Y-pu.Y)
+		if dist < (player.Size+pu.Size)/2 {
+			r.state.PowerUps = append(r.state.PowerUps[:i], r.state.PowerUps[i+1:]...)
+			r.applyRandomStatusEffectLocked(player.ID)
+		}
+	}
+}
+
 func (r *room) updateBombPowerUpLocked() {
 	if !r.isBombMode() {
 		return
 	}
-	if r.state.PowerUp.Active {
-		r.state.PowerUp.Remaining -= tickRate.Seconds()
-		if r.state.PowerUp.Remaining <= 0 {
-			r.clearPowerUpLocked()
+
+	for i := len(r.state.PowerUps) - 1; i >= 0; i-- {
+		r.state.PowerUps[i].Remaining -= tickRate.Seconds()
+		if r.state.PowerUps[i].Remaining <= 0 {
+			r.state.PowerUps = append(r.state.PowerUps[:i], r.state.PowerUps[i+1:]...)
 		}
+	}
+
+	if len(r.state.PowerUps) >= bombPowerUpMax {
 		return
 	}
 
-	if rand.Float64() < powerUpChance*tickRate.Seconds()*3 {
-		r.spawnPowerUpLocked()
+	r.bombPowerUpTimer -= tickRate.Seconds()
+	if r.bombPowerUpTimer <= 0 {
+		if r.spawnBombPowerUpLocked() {
+			r.bombPowerUpTimer = bombPowerUpInterval
+		} else {
+			r.bombPowerUpTimer = bombPowerUpInterval / 2
+		}
 	}
+}
+
+func (r *room) spawnBombPowerUpLocked() bool {
+	margin := 36.0
+	world := r.currentWorldSize()
+	for attempt := 0; attempt < 60; attempt++ {
+		x := margin + rand.Float64()*(world-margin*2)
+		y := margin + rand.Float64()*(world-margin*2)
+		if circleIntersectsAnyWall(x, y, powerUpSize/2+2, r.state.Walls) {
+			continue
+		}
+		pu := powerUpState{X: x, Y: y, Size: powerUpSize, Active: true, Remaining: powerUpLifetime}
+		r.state.PowerUps = append(r.state.PowerUps, pu)
+		return true
+	}
+	return false
 }
 
 func (r *room) resolvePlayersAfterWallChangeLocked() {

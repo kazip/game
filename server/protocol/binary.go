@@ -145,6 +145,22 @@ func encodeWallsBinary(walls []Wall, writer *binaryWriter) {
 	}
 }
 
+func encodePowerUpsBinary(powerUps []PowerUpState, writer *binaryWriter) {
+	count := len(powerUps)
+	if count > 255 {
+		count = 255
+	}
+	writer.writeUint8(uint8(count))
+	for i := 0; i < count; i++ {
+		writer.writeBool(powerUps[i].Active)
+		writer.writeFloat32(float32(powerUps[i].X))
+		writer.writeFloat32(float32(powerUps[i].Y))
+		writer.writeFloat32(float32(powerUps[i].Size))
+		writer.writeFloat32(float32(powerUps[i].Remaining))
+		writer.writeUint8(powerUpTypeCodes[powerUps[i].Type])
+	}
+}
+
 func encodeMinesBinary(mines []Mine, writer *binaryWriter) {
 	count := len(mines)
 	if count > 32 {
@@ -229,6 +245,8 @@ func EncodeState(state GameState) []byte {
 	writer.writeFloat32(float32(state.PowerUp.Size))
 	writer.writeFloat32(float32(state.PowerUp.Remaining))
 	writer.writeUint8(powerUpTypeCodes[state.PowerUp.Type])
+
+	encodePowerUpsBinary(state.PowerUps, writer)
 
 	encodeWallsBinary(state.Walls, writer)
 	encodeMinesBinary(state.Mines, writer)
@@ -330,6 +348,7 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 
 	var flags1 uint8
 	var flags2 uint8
+	var flags3 uint8
 
 	if patch.Phase != nil {
 		flags1 |= 1 << 0
@@ -381,8 +400,13 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 		flags2 |= 1 << 7
 	}
 
+	if len(patch.PowerUps) > 0 {
+		flags3 |= 1 << 0
+	}
+
 	writer.writeUint8(flags1)
 	writer.writeUint8(flags2)
+	writer.writeUint8(flags3)
 
 	if patch.Phase != nil {
 		writer.writeString(*patch.Phase)
@@ -423,6 +447,9 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 		writer.writeFloat32(float32(patch.PowerUp.Size))
 		writer.writeFloat32(float32(patch.PowerUp.Remaining))
 		writer.writeUint8(powerUpTypeCodes[patch.PowerUp.Type])
+	}
+	if len(patch.PowerUps) > 0 {
+		encodePowerUpsBinary(patch.PowerUps, writer)
 	}
 	if len(patch.Walls) > 0 {
 		encodeWallsBinary(patch.Walls, writer)
