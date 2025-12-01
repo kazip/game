@@ -213,6 +213,11 @@
             <input id="multiplayer-name" name="multiplayer-name" type="text" maxlength="32" autocomplete="name" placeholder="Котолюбитель" required>
             <label class="scoreboard-label" for="multiplayer-room">Название комнаты</label>
             <input id="multiplayer-room" name="multiplayer-room" type="text" maxlength="32" placeholder="Например, kotiki" required>
+            <label class="scoreboard-label" for="multiplayer-mode">Режим</label>
+            <select id="multiplayer-mode" name="multiplayer-mode">
+              <option value="classic">Охота за рыбкой</option>
+              <option value="bomb-pass">Бомба-пас</option>
+            </select>
             <div class="modal-actions">
               <button type="submit">Создать</button>
               <button id="multiplayer-cancel" type="button">Назад</button>
@@ -255,6 +260,7 @@
     <div id="multiplayer-hud" class="multiplayer-hud hidden" aria-live="polite">
       <div class="multiplayer-hud-header">
         <div>Комната: <span id="multiplayer-hud-room"></span></div>
+        <div>Режим: <span id="multiplayer-hud-mode"></span></div>
         <div id="multiplayer-countdown" class="multiplayer-countdown"></div>
       </div>
       <ul id="multiplayer-hud-players" class="multiplayer-hud-players"></ul>

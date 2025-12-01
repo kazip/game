@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"math/rand"
@@ -19,6 +20,7 @@ import (
 func quantizeStateForSend(state *gameState) {
 	state.Countdown = quantizeSeconds(state.Countdown)
 	state.Remaining = quantizeSeconds(state.Remaining)
+	state.BombTimer = quantizeSeconds(state.BombTimer)
 
 	state.Fish.X = quantizeCoord(state.Fish.X)
 	state.Fish.Y = quantizeCoord(state.Fish.Y)
@@ -101,10 +103,13 @@ func toProtocolGameState(state gameState) protocol.GameState {
 
 	return protocol.GameState{
 		RoomName:   state.RoomName,
+		Mode:       state.Mode,
 		Phase:      state.Phase,
 		Countdown:  state.Countdown,
 		Remaining:  state.Remaining,
 		Message:    state.Message,
+		BombHolder: state.BombHolder,
+		BombTimer:  state.BombTimer,
 		Players:    players,
 		Fish:       protocol.FishState(state.Fish),
 		Walls:      walls,
@@ -146,10 +151,13 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 		return nil
 	}
 	protoPatch := &protocol.StatePatch{}
+	protoPatch.Mode = patch.Mode
 	protoPatch.Phase = patch.Phase
 	protoPatch.Countdown = patch.Countdown
 	protoPatch.Remaining = patch.Remaining
 	protoPatch.Message = patch.Message
+	protoPatch.BombHolder = patch.BombHolder
+	protoPatch.BombTimer = patch.BombTimer
 	protoPatch.WinnerID = patch.WinnerID
 	protoPatch.Golden = patch.Golden
 	if patch.Status != nil {
@@ -255,12 +263,15 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 }
 
 func (p *statePatch) isEmpty() bool {
-	return p == nil || (p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.Message == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
+	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.Message == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
 }
 
 func buildStatePatch(previous, current gameState) *statePatch {
 	patch := &statePatch{}
 
+	if previous.Mode != current.Mode {
+		patch.Mode = stringPtr(current.Mode)
+	}
 	if previous.Phase != current.Phase {
 		patch.Phase = stringPtr(current.Phase)
 	}
@@ -272,6 +283,12 @@ func buildStatePatch(previous, current gameState) *statePatch {
 	}
 	if previous.Message != current.Message {
 		patch.Message = stringPtr(current.Message)
+	}
+	if previous.BombHolder != current.BombHolder {
+		patch.BombHolder = stringPtr(current.BombHolder)
+	}
+	if floatChanged(previous.BombTimer, current.BombTimer) {
+		patch.BombTimer = floatPtr(current.BombTimer)
 	}
 	if previous.WinnerID != current.WinnerID {
 		patch.WinnerID = stringPtr(current.WinnerID)
@@ -357,12 +374,22 @@ func newServer() *server {
 	return srv
 }
 
-func (s *server) getOrCreateRoom(name string) *room {
+func normalizeMode(mode string) string {
+	switch mode {
+	case "bomb-pass":
+		return mode
+	default:
+		return "classic"
+	}
+}
+
+func (s *server) getOrCreateRoom(name, mode string) *room {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.rooms[name]; ok {
 		return existing
 	}
+	normalizedMode := normalizeMode(mode)
 	r := &room{
 		name:             name,
 		players:          make(map[string]*playerState),
@@ -374,6 +401,7 @@ func (s *server) getOrCreateRoom(name string) *room {
 	}
 	r.state = gameState{
 		RoomName:   name,
+		Mode:       normalizedMode,
 		Phase:      "lobby",
 		Fish:       fishState{X: worldSize / 2, Y: worldSize / 2, Size: fishSize, Alive: false, Type: "normal", Direction: 1},
 		PowerUp:    powerUpState{Size: powerUpSize},
@@ -490,6 +518,7 @@ func (s *server) listRooms() []map[string]any {
 	for _, r := range s.rooms {
 		rooms = append(rooms, map[string]any{
 			"roomName":    r.name,
+			"mode":        r.state.Mode,
 			"phase":       r.state.Phase,
 			"playerCount": len(r.players),
 			"updatedAt":   time.Now().UnixMilli(),
@@ -555,6 +584,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	roomName := r.URL.Query().Get("room")
 	playerID := r.URL.Query().Get("playerId")
 	playerName := r.URL.Query().Get("name")
+	mode := r.URL.Query().Get("mode")
 	if roomName == "" || playerID == "" {
 		http.Error(w, "room and playerId required", http.StatusBadRequest)
 		return
@@ -564,7 +594,13 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("upgrade error: %v", err)
 		return
 	}
-	rInstance := s.getOrCreateRoom(roomName)
+	normalizedMode := normalizeMode(mode)
+	rInstance := s.getOrCreateRoom(roomName, normalizedMode)
+	if rInstance.state.Mode != normalizedMode {
+		conn.WriteJSON(wsMessage{Type: "error", Error: "Эта комната создана в другом режиме."})
+		conn.Close()
+		return
+	}
 	rInstance.handleConnection(conn, playerID, playerName)
 }
 
@@ -747,17 +783,22 @@ func (r *room) step() {
 			r.beginRoundLocked()
 		}
 	case "playing":
-		r.state.Remaining -= tickRate.Seconds()
 		r.updateStatusEffectLocked()
-		r.updatePowerUpLocked()
-		r.updatePlayersLocked()
-		if r.countAlivePlayersLocked() == 0 {
-			r.endRoundLocked("Раунд завершён: все коты погибли")
-			return
-		}
-		r.updateFishLocked()
-		if r.state.Remaining <= 0 {
-			r.endRoundLocked("Раунд завершён")
+		if r.isBombMode() {
+			r.updatePlayersLocked()
+			r.updateBombPassLocked()
+		} else {
+			r.state.Remaining -= tickRate.Seconds()
+			r.updatePowerUpLocked()
+			r.updatePlayersLocked()
+			if r.countAlivePlayersLocked() == 0 {
+				r.endRoundLocked("Раунд завершён: все коты погибли")
+				return
+			}
+			r.updateFishLocked()
+			if r.state.Remaining <= 0 {
+				r.endRoundLocked("Раунд завершён")
+			}
 		}
 	default:
 		r.updateLobbyMessageLocked()
@@ -773,10 +814,22 @@ func (r *room) beginRoundLocked() {
 	r.state.Walls = nil
 	r.state.Mines = nil
 	r.state.PowerUp = powerUpState{Size: powerUpSize}
-	r.spawnFishLocked()
+	if r.isBombMode() {
+		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
+		r.state.PowerUp.Active = false
+		r.state.Mines = nil
+		r.state.Walls = nil
+	} else {
+		r.spawnFishLocked()
+	}
 	for _, p := range r.players {
 		p.Alive = true
 		p.Score = 0
+	}
+	r.state.BombHolder = ""
+	r.state.BombTimer = bombTimerDuration
+	if r.isBombMode() {
+		r.assignBombToRandomAliveLocked(true)
 	}
 }
 
@@ -794,6 +847,14 @@ func (r *room) endRoundLocked(reason string) {
 
 func (r *room) bestPlayerIDLocked() string {
 	var best *playerState
+	if r.isBombMode() {
+		for _, p := range r.players {
+			if p.Alive {
+				return p.ID
+			}
+		}
+		return ""
+	}
 	for _, p := range r.players {
 		if best == nil || p.Score > best.Score {
 			best = p
@@ -854,6 +915,90 @@ func (r *room) countAlivePlayersLocked() int {
 		}
 	}
 	return count
+}
+
+func (r *room) alivePlayersLocked() []*playerState {
+	players := make([]*playerState, 0, len(r.players))
+	for _, p := range r.players {
+		if p.Alive {
+			players = append(players, p)
+		}
+	}
+	return players
+}
+
+func (r *room) isBombMode() bool {
+	return r.state.Mode == "bomb-pass"
+}
+
+func (r *room) assignBombToRandomAliveLocked(resetTimer bool) {
+	alive := r.alivePlayersLocked()
+	if len(alive) == 0 {
+		r.state.BombHolder = ""
+		return
+	}
+	picked := alive[rand.Intn(len(alive))]
+	r.state.BombHolder = picked.ID
+	if resetTimer {
+		r.state.BombTimer = bombTimerDuration
+	}
+	r.state.Message = fmt.Sprintf("Бомба у %s!", fallbackName(picked.Name))
+}
+
+func (r *room) handleBombTransferLocked() {
+	holder, ok := r.players[r.state.BombHolder]
+	if !ok || holder == nil || !holder.Alive {
+		return
+	}
+	for id, p := range r.players {
+		if id == holder.ID || !p.Alive {
+			continue
+		}
+		dist := math.Hypot(holder.X-p.X, holder.Y-p.Y)
+		if dist <= (holder.Size+p.Size)/2 {
+			r.state.BombHolder = p.ID
+			r.state.BombTimer = bombTimerDuration
+			r.state.Message = fmt.Sprintf("%s передал бомбу %s", fallbackName(holder.Name), fallbackName(p.Name))
+			return
+		}
+	}
+}
+
+func (r *room) updateBombPassLocked() {
+	if r.countAlivePlayersLocked() <= 1 {
+		r.endRoundLocked("Раунд завершён")
+		return
+	}
+	holder, exists := r.players[r.state.BombHolder]
+	if r.state.BombHolder == "" || !exists || holder == nil || !holder.Alive {
+		r.assignBombToRandomAliveLocked(true)
+	}
+	r.handleBombTransferLocked()
+	r.state.BombTimer -= tickRate.Seconds()
+	if r.state.BombTimer < 0 {
+		r.state.BombTimer = 0
+	}
+	r.state.Remaining = r.state.BombTimer
+
+	holder, ok := r.players[r.state.BombHolder]
+	if !ok || holder == nil || !holder.Alive {
+		r.assignBombToRandomAliveLocked(true)
+	}
+	holder = r.players[r.state.BombHolder]
+	if holder != nil && holder.Alive && r.state.BombTimer <= 0 {
+		holder.Alive = false
+		holder.Moving = false
+		r.state.Message = fmt.Sprintf("%s не успел избавиться от бомбы!", fallbackName(holder.Name))
+		r.state.BombHolder = ""
+		r.state.BombTimer = bombTimerDuration
+	}
+	if r.countAlivePlayersLocked() <= 1 {
+		r.endRoundLocked("Выжил только один котик!")
+		return
+	}
+	if r.state.BombHolder == "" {
+		r.assignBombToRandomAliveLocked(true)
+	}
 }
 
 func (r *room) updateFishLocked() {

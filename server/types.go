@@ -26,6 +26,7 @@ const (
 	powerUpDuration   = 30.0
 	timeIncreaseLimit = 15.0
 	timeDecreaseLimit = 5.0
+	bombTimerDuration = 12.0
 	dataFileName      = "data.json"
 	reconnectGrace    = 10 * time.Second
 )
@@ -78,10 +79,13 @@ type fishState struct {
 
 type gameState struct {
 	RoomName   string         `json:"roomName"`
+	Mode       string         `json:"mode"`
 	Phase      string         `json:"phase"`
 	Countdown  float64        `json:"countdown"`
 	Remaining  float64        `json:"remaining"`
 	Message    string         `json:"message"`
+	BombHolder string         `json:"bombHolder"`
+	BombTimer  float64        `json:"bombTimer"`
 	Players    []*playerState `json:"players"`
 	Fish       fishState      `json:"fish"`
 	Walls      []wall         `json:"walls"`
@@ -162,10 +166,13 @@ type playerPatch struct {
 }
 
 type statePatch struct {
+	Mode           *string       `json:"mode,omitempty"`
 	Phase          *string       `json:"phase,omitempty"`
 	Countdown      *float64      `json:"countdown,omitempty"`
 	Remaining      *float64      `json:"remaining,omitempty"`
 	Message        *string       `json:"message,omitempty"`
+	BombHolder     *string       `json:"bombHolder,omitempty"`
+	BombTimer      *float64      `json:"bombTimer,omitempty"`
 	WinnerID       *string       `json:"winnerId,omitempty"`
 	Golden         *bool         `json:"goldenChainActive,omitempty"`
 	Status         *statusEffect `json:"statusEffect,omitempty"`

@@ -193,12 +193,15 @@ func EncodeState(state GameState) []byte {
 	writer.writeUint32(uint32(state.ServerTime))
 	writer.writeUint32(state.TickIndex)
 	writer.writeString(state.RoomName)
+	writer.writeString(state.Mode)
 	writer.writeUint8(phaseCodes[state.Phase])
 	writer.writeFloat32(float32(state.Countdown))
 	writer.writeFloat32(float32(state.Remaining))
 	writer.writeBool(state.Golden)
 	writer.writeString(state.WinnerID)
 	writer.writeString(state.Message)
+	writer.writeString(state.BombHolder)
+	writer.writeFloat32(float32(state.BombTimer))
 
 	statusType := ""
 	statusRemaining := float32(0)
@@ -365,6 +368,15 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 	if len(patch.RemovedPlayers) > 0 {
 		flags2 |= 1 << 4
 	}
+	if patch.Mode != nil {
+		flags2 |= 1 << 5
+	}
+	if patch.BombHolder != nil {
+		flags2 |= 1 << 6
+	}
+	if patch.BombTimer != nil {
+		flags2 |= 1 << 7
+	}
 
 	writer.writeUint8(flags1)
 	writer.writeUint8(flags2)
@@ -433,6 +445,16 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 		for i := 0; i < count; i++ {
 			writer.writeString(patch.RemovedPlayers[i])
 		}
+	}
+
+	if patch.Mode != nil {
+		writer.writeString(*patch.Mode)
+	}
+	if patch.BombHolder != nil {
+		writer.writeString(*patch.BombHolder)
+	}
+	if patch.BombTimer != nil {
+		writer.writeFloat32(float32(*patch.BombTimer))
 	}
 
 	return writer.bytes()
