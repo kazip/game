@@ -465,6 +465,9 @@ function decodePatch(reader) {
       type: Object.keys(POWER_UP_TYPE_CODES).find((key) => POWER_UP_TYPE_CODES[key] === reader.readUint8()) || null
     };
   }
+  if (flags3 & (1 << 0)) {
+    patch.powerUps = decodePowerUps(reader);
+  }
   if (flags2 & (1 << 1)) {
     patch.walls = decodeWalls(reader);
   }
@@ -493,9 +496,6 @@ function decodePatch(reader) {
   }
   if (flags2 & (1 << 7)) {
     patch.bombTimer = reader.readFloat32();
-  }
-  if (flags3 & (1 << 0)) {
-    patch.powerUps = decodePowerUps(reader);
   }
   return { patch };
 }
