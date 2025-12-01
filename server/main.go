@@ -857,7 +857,8 @@ func (r *room) beginRoundLocked() {
 		r.state.PowerUps = nil
 		r.state.Mines = nil
 		r.buildBombPassArenaLocked()
-		r.bombPowerUpTimer = bombPowerUpInterval
+		r.bombPowerUpTimer = 0
+		r.updateBombPowerUpLocked()
 	} else {
 		r.spawnFishLocked()
 	}
