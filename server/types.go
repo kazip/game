@@ -32,7 +32,7 @@ const (
 	powerUpDuration       = 30.0
 	timeIncreaseLimit     = 15.0
 	timeDecreaseLimit     = 5.0
-	bombTimerDuration     = 12.0
+	bombTimerDuration     = 30.0
 	bombSlowDuration      = 1.0
 	bombSlowFactor        = 0.6
 	bombTimerBonus        = 2.0
