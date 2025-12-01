@@ -172,7 +172,11 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 	protoPatch.WinnerID = patch.WinnerID
 	protoPatch.Golden = patch.Golden
 	if patch.Status != nil {
-		protoPatch.Status = &protocol.StatusEffect{Type: patch.Status.Type, Remaining: patch.Status.Remaining, PlayerID: patch.Status.PlayerID}
+		protoPatch.Status = &protocol.StatusEffect{
+			Type:      patch.Status.Type,
+			Remaining: patch.Status.Remaining,
+			PlayerID:  patch.Status.PlayerID,
+		}
 	}
 	if patch.Fish != nil {
 		fish := protocol.FishState(*patch.Fish)
@@ -182,7 +186,7 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 		power := protocol.PowerUpState(*patch.PowerUp)
 		protoPatch.PowerUp = &power
 	}
-	if len(patch.PowerUps) > 0 {
+	if patch.PowerUps != nil {
 		powerUps := make([]protocol.PowerUpState, len(patch.PowerUps))
 		for i, p := range patch.PowerUps {
 			powerUps[i] = protocol.PowerUpState(p)
@@ -316,7 +320,11 @@ func buildStatePatch(previous, current gameState) *statePatch {
 		patch.Golden = boolPtr(current.Golden)
 	}
 	if !statusEqual(previous.Status, current.Status) {
-		patch.Status = current.Status
+		if current.Status == nil {
+			patch.Status = &statusEffect{}
+		} else {
+			patch.Status = current.Status
+		}
 	}
 	if !fishEqual(previous.Fish, current.Fish) {
 		fishCopy := current.Fish
@@ -327,7 +335,11 @@ func buildStatePatch(previous, current gameState) *statePatch {
 		patch.PowerUp = &powerCopy
 	}
 	if !powerUpSlicesEqual(previous.PowerUps, current.PowerUps) {
-		patch.PowerUps = clonePowerUps(current.PowerUps)
+		if len(current.PowerUps) == 0 {
+			patch.PowerUps = []powerUpState{}
+		} else {
+			patch.PowerUps = clonePowerUps(current.PowerUps)
+		}
 	}
 	if !wallsEqual(previous.Walls, current.Walls) {
 		patch.Walls = cloneWalls(current.Walls)
@@ -1481,7 +1493,7 @@ func (r *room) spawnBombPowerUpLocked() bool {
 		if circleIntersectsAnyWall(x, y, powerUpSize/2+2, r.state.Walls) {
 			continue
 		}
-		pu := powerUpState{X: x, Y: y, Size: powerUpSize, Active: true, Remaining: powerUpLifetime}
+		pu := powerUpState{X: x, Y: y, Size: powerUpSize, Active: true, Remaining: bombPowerUpLifetime}
 		r.state.PowerUps = append(r.state.PowerUps, pu)
 		return true
 	}
