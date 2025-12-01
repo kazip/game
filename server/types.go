@@ -32,6 +32,8 @@ const (
 	powerUpDuration       = 30.0
 	timeIncreaseLimit     = 15.0
 	timeDecreaseLimit     = 5.0
+	bombPowerUpInterval   = 5.0
+	bombPowerUpMax        = 10
 	bombTimerDuration     = 30.0
 	bombSlowDuration      = 1.0
 	bombSlowFactor        = 0.6
@@ -100,6 +102,7 @@ type gameState struct {
 	Walls      []wall         `json:"walls"`
 	Mines      []mine         `json:"mines"`
 	PowerUp    powerUpState   `json:"powerUp"`
+	PowerUps   []powerUpState `json:"powerUps,omitempty"`
 	Status     *statusEffect  `json:"statusEffect"`
 	WinnerID   string         `json:"winnerId"`
 	Golden     bool           `json:"goldenChainActive"`
@@ -176,22 +179,23 @@ type playerPatch struct {
 }
 
 type statePatch struct {
-	Mode           *string       `json:"mode,omitempty"`
-	Phase          *string       `json:"phase,omitempty"`
-	Countdown      *float64      `json:"countdown,omitempty"`
-	Remaining      *float64      `json:"remaining,omitempty"`
-	Message        *string       `json:"message,omitempty"`
-	BombHolder     *string       `json:"bombHolder,omitempty"`
-	BombTimer      *float64      `json:"bombTimer,omitempty"`
-	WinnerID       *string       `json:"winnerId,omitempty"`
-	Golden         *bool         `json:"goldenChainActive,omitempty"`
-	Status         *statusEffect `json:"statusEffect,omitempty"`
-	Fish           *fishState    `json:"fish,omitempty"`
-	PowerUp        *powerUpState `json:"powerUp,omitempty"`
-	Walls          []wall        `json:"walls,omitempty"`
-	Mines          []mine        `json:"mines,omitempty"`
-	Players        []playerPatch `json:"players,omitempty"`
-	RemovedPlayers []string      `json:"removedPlayers,omitempty"`
+	Mode           *string        `json:"mode,omitempty"`
+	Phase          *string        `json:"phase,omitempty"`
+	Countdown      *float64       `json:"countdown,omitempty"`
+	Remaining      *float64       `json:"remaining,omitempty"`
+	Message        *string        `json:"message,omitempty"`
+	BombHolder     *string        `json:"bombHolder,omitempty"`
+	BombTimer      *float64       `json:"bombTimer,omitempty"`
+	WinnerID       *string        `json:"winnerId,omitempty"`
+	Golden         *bool          `json:"goldenChainActive,omitempty"`
+	Status         *statusEffect  `json:"statusEffect,omitempty"`
+	Fish           *fishState     `json:"fish,omitempty"`
+	PowerUp        *powerUpState  `json:"powerUp,omitempty"`
+	PowerUps       []powerUpState `json:"powerUps,omitempty"`
+	Walls          []wall         `json:"walls,omitempty"`
+	Mines          []mine         `json:"mines,omitempty"`
+	Players        []playerPatch  `json:"players,omitempty"`
+	RemovedPlayers []string       `json:"removedPlayers,omitempty"`
 }
 
 type chatMessage struct {

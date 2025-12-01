@@ -60,24 +60,25 @@ type PlayerState struct {
 }
 
 type GameState struct {
-	RoomName   string        `json:"roomName"`
-	Mode       string        `json:"mode"`
-	Phase      string        `json:"phase"`
-	Countdown  float64       `json:"countdown"`
-	Remaining  float64       `json:"remaining"`
-	Message    string        `json:"message"`
-	BombHolder string        `json:"bombHolder"`
-	BombTimer  float64       `json:"bombTimer"`
-	Players    []PlayerState `json:"players"`
-	Fish       FishState     `json:"fish"`
-	Walls      []Wall        `json:"walls"`
-	Mines      []Mine        `json:"mines"`
-	PowerUp    PowerUpState  `json:"powerUp"`
-	Status     *StatusEffect `json:"statusEffect"`
-	WinnerID   string        `json:"winnerId"`
-	Golden     bool          `json:"goldenChainActive"`
-	TickIndex  uint32        `json:"tickIndex"`
-	ServerTime int64         `json:"serverTime"`
+	RoomName   string         `json:"roomName"`
+	Mode       string         `json:"mode"`
+	Phase      string         `json:"phase"`
+	Countdown  float64        `json:"countdown"`
+	Remaining  float64        `json:"remaining"`
+	Message    string         `json:"message"`
+	BombHolder string         `json:"bombHolder"`
+	BombTimer  float64        `json:"bombTimer"`
+	Players    []PlayerState  `json:"players"`
+	Fish       FishState      `json:"fish"`
+	Walls      []Wall         `json:"walls"`
+	Mines      []Mine         `json:"mines"`
+	PowerUp    PowerUpState   `json:"powerUp"`
+	PowerUps   []PowerUpState `json:"powerUps,omitempty"`
+	Status     *StatusEffect  `json:"statusEffect"`
+	WinnerID   string         `json:"winnerId"`
+	Golden     bool           `json:"goldenChainActive"`
+	TickIndex  uint32         `json:"tickIndex"`
+	ServerTime int64          `json:"serverTime"`
 }
 
 type PlayerPatch struct {
@@ -97,20 +98,21 @@ type PlayerPatch struct {
 }
 
 type StatePatch struct {
-	Mode           *string       `json:"mode,omitempty"`
-	Phase          *string       `json:"phase,omitempty"`
-	Countdown      *float64      `json:"countdown,omitempty"`
-	Remaining      *float64      `json:"remaining,omitempty"`
-	Message        *string       `json:"message,omitempty"`
-	BombHolder     *string       `json:"bombHolder,omitempty"`
-	BombTimer      *float64      `json:"bombTimer,omitempty"`
-	WinnerID       *string       `json:"winnerId,omitempty"`
-	Golden         *bool         `json:"goldenChainActive,omitempty"`
-	Status         *StatusEffect `json:"statusEffect,omitempty"`
-	Fish           *FishState    `json:"fish,omitempty"`
-	PowerUp        *PowerUpState `json:"powerUp,omitempty"`
-	Walls          []Wall        `json:"walls,omitempty"`
-	Mines          []Mine        `json:"mines,omitempty"`
-	Players        []PlayerPatch `json:"players,omitempty"`
-	RemovedPlayers []string      `json:"removedPlayers,omitempty"`
+	Mode           *string        `json:"mode,omitempty"`
+	Phase          *string        `json:"phase,omitempty"`
+	Countdown      *float64       `json:"countdown,omitempty"`
+	Remaining      *float64       `json:"remaining,omitempty"`
+	Message        *string        `json:"message,omitempty"`
+	BombHolder     *string        `json:"bombHolder,omitempty"`
+	BombTimer      *float64       `json:"bombTimer,omitempty"`
+	WinnerID       *string        `json:"winnerId,omitempty"`
+	Golden         *bool          `json:"goldenChainActive,omitempty"`
+	Status         *StatusEffect  `json:"statusEffect,omitempty"`
+	Fish           *FishState     `json:"fish,omitempty"`
+	PowerUp        *PowerUpState  `json:"powerUp,omitempty"`
+	PowerUps       []PowerUpState `json:"powerUps,omitempty"`
+	Walls          []Wall         `json:"walls,omitempty"`
+	Mines          []Mine         `json:"mines,omitempty"`
+	Players        []PlayerPatch  `json:"players,omitempty"`
+	RemovedPlayers []string       `json:"removedPlayers,omitempty"`
 }

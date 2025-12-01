@@ -64,6 +64,18 @@ func powerUpEqual(a, b powerUpState) bool {
 	return !floatChanged(a.X, b.X) && !floatChanged(a.Y, b.Y) && !floatChanged(a.Size, b.Size) && !floatChanged(a.Remaining, b.Remaining) && a.Active == b.Active && a.Type == b.Type
 }
 
+func powerUpSlicesEqual(a, b []powerUpState) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !powerUpEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 func wallsEqual(a, b []wall) bool {
 	if len(a) != len(b) {
 		return false
@@ -112,6 +124,15 @@ func cloneMines(src []mine) []mine {
 		return nil
 	}
 	dst := make([]mine, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func clonePowerUps(src []powerUpState) []powerUpState {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]powerUpState, len(src))
 	copy(dst, src)
 	return dst
 }

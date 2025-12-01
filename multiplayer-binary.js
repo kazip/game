@@ -177,6 +177,35 @@ function decodeMines(reader) {
   return mines;
 }
 
+function encodePowerUps(powerUps = [], writer) {
+  writer.writeUint8(Math.min(powerUps.length, 255));
+  powerUps.slice(0, 255).forEach((powerUp) => {
+    writer.writeBool(Boolean(powerUp.active));
+    writer.writeFloat32(powerUp.x || 0);
+    writer.writeFloat32(powerUp.y || 0);
+    writer.writeFloat32(powerUp.size || 0);
+    writer.writeFloat32(powerUp.remaining || 0);
+    writer.writeUint8(POWER_UP_TYPE_CODES[powerUp.type] ?? 0);
+  });
+}
+
+function decodePowerUps(reader) {
+  const count = reader.readUint8();
+  const powerUps = [];
+  for (let i = 0; i < count; i += 1) {
+    powerUps.push({
+      active: reader.readBool(),
+      x: reader.readFloat32(),
+      y: reader.readFloat32(),
+      size: reader.readFloat32(),
+      remaining: reader.readFloat32(),
+      type:
+        Object.keys(POWER_UP_TYPE_CODES).find((key) => POWER_UP_TYPE_CODES[key] === reader.readUint8()) || null
+    });
+  }
+  return powerUps;
+}
+
 function encodePlayers(players = [], writer) {
   writer.writeUint8(Math.min(players.length, 32));
   players.slice(0, 32).forEach((player) => {
@@ -265,6 +294,8 @@ export function encodeStateToBase64(state) {
   writer.writeFloat32(state.powerUp?.size || 0);
   writer.writeFloat32(state.powerUp?.remaining || 0);
   writer.writeUint8(POWER_UP_TYPE_CODES[state.powerUp?.type] ?? 0);
+
+  encodePowerUps(state.powerUps, writer);
 
   encodeWalls(state.walls, writer);
   encodeMines(state.mines, writer);
@@ -356,6 +387,8 @@ function decodeFullState(reader) {
   powerUp.type =
     Object.keys(POWER_UP_TYPE_CODES).find((key) => POWER_UP_TYPE_CODES[key] === powerUpType) || null;
 
+  const powerUps = decodePowerUps(reader);
+
   const walls = decodeWalls(reader);
   const mines = decodeMines(reader);
   const players = decodePlayers(reader);
@@ -376,6 +409,7 @@ function decodeFullState(reader) {
         : null,
       fish,
       powerUp,
+      powerUps,
       walls,
       mines,
       players,
@@ -391,6 +425,7 @@ function decodePatch(reader) {
   const tickIndex = reader.readUint32();
   const flags1 = reader.readUint8();
   const flags2 = reader.readUint8();
+  const flags3 = reader.readUint8();
   const patch = { serverTime, tickIndex };
 
   if (flags1 & (1 << 0)) patch.phase = reader.readString();
@@ -458,6 +493,9 @@ function decodePatch(reader) {
   }
   if (flags2 & (1 << 7)) {
     patch.bombTimer = reader.readFloat32();
+  }
+  if (flags3 & (1 << 0)) {
+    patch.powerUps = decodePowerUps(reader);
   }
   return { patch };
 }

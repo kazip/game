@@ -2984,6 +2984,9 @@ function applyMultiplayerStatePatch(previousState, patch) {
   if (patch.powerUp) {
     nextState.powerUp = { ...previousState.powerUp, ...patch.powerUp };
   }
+  if (Array.isArray(patch.powerUps)) {
+    nextState.powerUps = patch.powerUps.map((powerUp) => ({ ...powerUp }));
+  }
   if (Array.isArray(patch.walls)) {
     nextState.walls = patch.walls.map((wall) => ({ ...wall }));
   }
@@ -3403,11 +3406,12 @@ class MultiplayerManager {
       }
       drawWallsCollection(this.state.walls || []);
       drawMinesCollection(this.state.mines || []);
+      (this.state.powerUps || []).forEach((powerUpState) => drawPowerUpSprite(powerUpState));
       drawPowerUpSprite(this.state.powerUp);
-      drawFishSprite(fish);
-      players.forEach((player) => {
-        drawCatSprite(player);
-      });
+        drawFishSprite(fish);
+        players.forEach((player) => {
+          drawCatSprite(player);
+        });
       if (this.mode === "bomb-pass" && this.state.bombHolder) {
         const holder = players.find((player) => player.id === this.state.bombHolder);
         if (holder) {
