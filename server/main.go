@@ -1262,7 +1262,8 @@ func (r *room) schedulePlayerRemovalLocked(playerID string) {
 		timer.Stop()
 	}
 
-	timer := time.AfterFunc(reconnectGrace, func() {
+	var timer *time.Timer
+	timer = time.AfterFunc(reconnectGrace, func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 
