@@ -3009,6 +3009,7 @@ class MultiplayerManager {
     this.chatMessages = [];
     this.lobby = lobby;
     this.lastLocalStepAccumulator = 0;
+    this.lastLocalCameraTarget = null;
     this.reconnectEnabled = false;
     this.reconnectTimer = null;
     this.reconnectAttempts = 0;
@@ -3051,6 +3052,7 @@ class MultiplayerManager {
     this.playerName = "";
     this.mode = "classic";
     this.worldSize = WORLD_SIZE;
+    this.lastLocalCameraTarget = null;
     this.updateReadyButton();
     this.updateHud();
   }
@@ -3359,10 +3361,12 @@ class MultiplayerManager {
 
     let camera = null;
     if (this.state && this.mode === "bomb-pass") {
-      const focusPlayer = players.find((player) => player.id === this.playerId) || players[0] || null;
-      camera = getCameraOrigin(focusPlayer, worldSize, viewSize);
-      ctx.save();
-      ctx.translate(-camera.x, -camera.y);
+      const focusPlayer = this.getCameraTarget(players);
+      if (focusPlayer) {
+        camera = getCameraOrigin(focusPlayer, worldSize, viewSize);
+        ctx.save();
+        ctx.translate(-camera.x, -camera.y);
+      }
     }
 
     if (this.state) {
@@ -3389,6 +3393,28 @@ class MultiplayerManager {
       drawMinimap(players, this.state.walls || [], worldSize, viewSize, camera);
     }
     multiplayerRenderHandle = requestAnimationFrame(this.renderFrameBound);
+  }
+
+  getCameraTarget(players = []) {
+    const localPlayer = players.find((player) => player.id === this.playerId);
+    if (localPlayer) {
+      this.lastLocalCameraTarget = { ...localPlayer };
+      return localPlayer;
+    }
+
+    if (this.lastLocalCameraTarget) {
+      return this.lastLocalCameraTarget;
+    }
+
+    const bombHolderId = this.state?.bombHolder;
+    if (bombHolderId) {
+      const holder = players.find((player) => player.id === bombHolderId);
+      if (holder) {
+        return holder;
+      }
+    }
+
+    return players[0] || null;
   }
 
   getInterpolatedPlayers(progress) {
