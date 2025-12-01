@@ -1480,6 +1480,7 @@ func (r *room) spawnBombPowerUpLocked() bool {
 			continue
 		}
 		pu := powerUpState{X: x, Y: y, Size: powerUpSize, Active: true, Remaining: powerUpLifetime}
+		log.Println(pu)
 		r.state.PowerUps = append(r.state.PowerUps, pu)
 		return true
 	}
