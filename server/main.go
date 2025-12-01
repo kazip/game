@@ -972,6 +972,13 @@ func (r *room) maxWallTotalLen() int {
 	return maxWallTotalLen
 }
 
+func (r *room) maxSegments() int {
+	if r.isBombMode() {
+		return bombMaxSegments
+	}
+	return maxSegments
+}
+
 func (r *room) applyBombSlowdownLocked(playerID string) {
 	if !r.isBombMode() {
 		return
