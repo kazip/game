@@ -15,7 +15,7 @@ const (
 	gridCellSize          = worldSize / gridSize
 	wallThickness         = gridCellSize * wallThicknessRate
 	maxWallTotalLen       = 10
-	bombMaxWallTotalLen   = 16
+	bombMaxWallTotalLen   = 160
 	tickRate              = time.Second / 60
 	broadcastRate         = time.Second / 15
 	countdownDuration     = 3 * time.Second
