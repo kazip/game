@@ -3,37 +3,39 @@ package main
 import "time"
 
 const (
-	worldSize         = 500.0
-	bombWorldScale    = 5.0
-	catSpeed          = 180.0
-	catSize           = 36.0
-	fishSize          = 28.0
-	fishSwimSpeed     = 36.0
-	gridSize          = 10
-	wallThicknessRate = 0.6
-	gridCellSize      = worldSize / gridSize
-	wallThickness     = gridCellSize * wallThicknessRate
-	maxWallTotalLen   = 10
-	tickRate          = time.Second / 60
-	broadcastRate     = time.Second / 15
-	countdownDuration = 3 * time.Second
-	roundDuration     = 60 * time.Second
-	fishCatchDistance = 34.0
-	maxMines          = 3
-	mineSize          = 26.0
-	mineMinDistance   = 25.0
-	powerUpSize       = 34.0
-	powerUpChance     = 0.05
-	powerUpLifetime   = 5.0
-	powerUpDuration   = 30.0
-	timeIncreaseLimit = 15.0
-	timeDecreaseLimit = 5.0
-	bombTimerDuration = 12.0
-	bombSlowDuration  = 1.0
-	bombSlowFactor    = 0.6
-	bombTimerBonus    = 2.0
-	dataFileName      = "data.json"
-	reconnectGrace    = 10 * time.Second
+	worldSize             = 500.0
+	bombWorldScale        = 5.0
+	catSpeed              = 180.0
+	catSize               = 36.0
+	fishSize              = 28.0
+	fishSwimSpeed         = 36.0
+	gridSize              = 10
+	wallThicknessRate     = 0.6
+	bombWallThicknessRate = 0.35
+	gridCellSize          = worldSize / gridSize
+	wallThickness         = gridCellSize * wallThicknessRate
+	maxWallTotalLen       = 10
+	bombMaxWallTotalLen   = 16
+	tickRate              = time.Second / 60
+	broadcastRate         = time.Second / 15
+	countdownDuration     = 3 * time.Second
+	roundDuration         = 60 * time.Second
+	fishCatchDistance     = 34.0
+	maxMines              = 3
+	mineSize              = 26.0
+	mineMinDistance       = 25.0
+	powerUpSize           = 34.0
+	powerUpChance         = 0.05
+	powerUpLifetime       = 5.0
+	powerUpDuration       = 30.0
+	timeIncreaseLimit     = 15.0
+	timeDecreaseLimit     = 5.0
+	bombTimerDuration     = 12.0
+	bombSlowDuration      = 1.0
+	bombSlowFactor        = 0.6
+	bombTimerBonus        = 2.0
+	dataFileName          = "data.json"
+	reconnectGrace        = 10 * time.Second
 )
 
 type vector struct {
