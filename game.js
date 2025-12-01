@@ -496,6 +496,14 @@ function showMainMenu() {
   gameMode = "menu";
 }
 
+async function navigateToMainMenu() {
+  if (gameMode === "multiplayer" || multiplayerManager) {
+    await leaveMultiplayerRoom({ backToMenu: true });
+    return;
+  }
+  showMainMenu();
+}
+
 function hideMainMenu() {
   if (mainMenuOverlay) {
     mainMenuOverlay.classList.add("hidden");
@@ -3780,7 +3788,7 @@ window.addEventListener("keyup", (event) => {
 
 if (openMenuBtn) {
   openMenuBtn.addEventListener("click", () => {
-    showMainMenu();
+    navigateToMainMenu();
   });
 }
 
