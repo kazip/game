@@ -3625,28 +3625,30 @@ class MultiplayerManager {
     }
 
     const walls = this.state?.walls || this.previousRenderState?.walls || [];
+    const mines = this.state?.mines || this.previousRenderState?.mines || [];
+    const powerUps = this.state?.powerUps || this.previousRenderState?.powerUps || [];
+    const powerUp = this.state?.powerUp || this.previousRenderState?.powerUp;
 
-    if (this.state) {
-      if (this.mode === "bomb-pass") {
-        drawBombPassBackground(worldSize);
+    if (this.mode === "bomb-pass" && this.state) {
+      drawBombPassBackground(worldSize);
+    }
+
+    drawWallsCollection(walls);
+    drawMinesCollection(mines);
+    powerUps.forEach((powerUpState) => drawPowerUpSprite(powerUpState));
+    drawPowerUpSprite(powerUp);
+    drawFishSprite(fish);
+    players.forEach((player) => {
+      if (this.mode === "hide-and-seek" && player.disguise) {
+        drawDisguisedPlayer(player);
+      } else {
+        drawCatSprite(player);
       }
-      drawWallsCollection(walls);
-      drawMinesCollection(this.state.mines || []);
-      (this.state.powerUps || []).forEach((powerUpState) => drawPowerUpSprite(powerUpState));
-      drawPowerUpSprite(this.state.powerUp);
-        drawFishSprite(fish);
-        players.forEach((player) => {
-          if (this.mode === "hide-and-seek" && player.disguise) {
-            drawDisguisedPlayer(player);
-          } else {
-            drawCatSprite(player);
-          }
-        });
-      if (this.mode === "bomb-pass" && this.state.bombHolder) {
-        const holder = players.find((player) => player.id === this.state.bombHolder);
-        if (holder) {
-          drawBombLabel(holder, this.state.bombTimer ?? 0);
-        }
+    });
+    if (this.mode === "bomb-pass" && this.state?.bombHolder) {
+      const holder = players.find((player) => player.id === this.state.bombHolder);
+      if (holder) {
+        drawBombLabel(holder, this.state.bombTimer ?? 0);
       }
     }
 
