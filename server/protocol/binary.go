@@ -387,10 +387,10 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 	if patch.PowerUp != nil {
 		flags2 |= 1 << 0
 	}
-	if len(patch.Walls) > 0 {
+	if patch.Walls != nil {
 		flags2 |= 1 << 1
 	}
-	if len(patch.Mines) > 0 {
+	if patch.Mines != nil {
 		flags2 |= 1 << 2
 	}
 	if len(patch.Players) > 0 {
@@ -409,7 +409,7 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 		flags2 |= 1 << 7
 	}
 
-	if len(patch.PowerUps) > 0 {
+	if patch.PowerUps != nil {
 		flags3 |= 1 << 0
 	}
 	if patch.SeekerID != nil {
@@ -463,7 +463,7 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 		writer.writeFloat32(float32(patch.PowerUp.Remaining))
 		writer.writeUint8(powerUpTypeCodes[patch.PowerUp.Type])
 	}
-	if len(patch.PowerUps) > 0 {
+	if patch.PowerUps != nil {
 		encodePowerUpsBinary(patch.PowerUps, writer)
 	}
 	if patch.SeekerID != nil {
@@ -472,10 +472,10 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 	if patch.HidePhase != nil {
 		writer.writeString(*patch.HidePhase)
 	}
-	if len(patch.Walls) > 0 {
+	if patch.Walls != nil {
 		encodeWallsBinary(patch.Walls, writer)
 	}
-	if len(patch.Mines) > 0 {
+	if patch.Mines != nil {
 		encodeMinesBinary(patch.Mines, writer)
 	}
 	if len(patch.Players) > 0 {
