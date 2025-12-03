@@ -18,6 +18,26 @@ body {
   padding: 16px;
 }
 
+body.holiday-theme {
+  background:
+    radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.8), transparent 35%),
+    radial-gradient(circle at 80% 25%, rgba(255, 255, 255, 0.7), transparent 32%),
+    linear-gradient(180deg, #5fa9ff 0%, #7ac7ff 40%, #f4fbff 100%);
+  color: #0f2c4d;
+}
+
+body.holiday-theme::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='140' viewBox='0 0 240 140'%3E%3Cpolygon points='20,120 50,70 80,120' fill='%233a8f4d'/%3E%3Cpolygon points='36,120 58,82 80,120' fill='%235fbf72'/%3E%3Cpolygon points='110,120 140,70 170,120' fill='%23307a3c'/%3E%3Cpolygon points='126,120 148,82 170,120' fill='%2387d7a1'/%3E%3Cpolygon points='190,120 220,72 250,120' fill='%233a8f4d'/%3E%3Cpolygon points='206,120 228,86 250,120' fill='%236fc28a'/%3E%3Crect x='0' y='120' width='260' height='20' fill='%23f7fdff'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-position: center calc(100% - 6px);
+  background-size: 240px 140px;
+  opacity: 0.9;
+}
+
 .game-container {
   display: grid;
   gap: 18px;
@@ -28,6 +48,15 @@ body {
   box-shadow: 0 10px 30px rgba(20, 54, 93, 0.25);
   max-width: 640px;
   width: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+.holiday-theme .game-container {
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 12px 36px rgba(15, 44, 77, 0.3);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(6px);
 }
 
 h1 {
@@ -38,6 +67,40 @@ h1 {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.holiday-garland {
+  position: absolute;
+  top: -6px;
+  right: 8px;
+  width: 210px;
+  height: 90px;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle, rgba(255, 235, 59, 0.9) 0, rgba(255, 235, 59, 0.9) 32%, transparent 40%),
+    radial-gradient(circle, rgba(244, 81, 30, 0.9) 0, rgba(244, 81, 30, 0.9) 32%, transparent 40%),
+    radial-gradient(circle, rgba(103, 58, 183, 0.9) 0, rgba(103, 58, 183, 0.9) 32%, transparent 40%),
+    radial-gradient(circle, rgba(76, 175, 80, 0.9) 0, rgba(76, 175, 80, 0.9) 32%, transparent 40%);
+  background-size: 28px 28px, 28px 28px, 28px 28px, 28px 28px;
+  background-position: 12px 22px, 52px 46px, 96px 26px, 140px 54px;
+  background-repeat: no-repeat;
+}
+
+.holiday-garland::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 10% 40%, rgba(0, 0, 0, 0.08), transparent 45%);
+}
+
+.holiday-garland::after {
+  content: "";
+  position: absolute;
+  inset: 6px 0 auto;
+  height: 4px;
+  background: repeating-linear-gradient(90deg, #0f2c4d 0, #0f2c4d 14px, transparent 14px, transparent 20px);
+  border-radius: 999px;
+  box-shadow: 0 8px 12px rgba(0, 0, 0, 0.08);
 }
 
 .hud {
@@ -83,6 +146,15 @@ canvas {
   width: min(100%, var(--board-size, 500px));
   aspect-ratio: 1 / 1;
   touch-action: none;
+}
+
+.holiday-theme canvas {
+  border-color: #0f2c4d;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.8), transparent 40%),
+    radial-gradient(circle at 80% 10%, rgba(255, 255, 255, 0.7), transparent 36%),
+    linear-gradient(180deg, #cbe9ff 0%, #f5fbff 45%, #ffffff 100%);
+  box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.55);
 }
 
 #message {

@@ -21,6 +21,8 @@ bombPassBackground.onload = () => {
 };
 bombPassBackground.src = "assets/bomb-pass-bg.svg";
 
+const HOLIDAY_MODE_ENABLED = true;
+
 const DEFAULT_CAT_APPEARANCE = {
   baseColor: "#ffb347",
   bellyColor: "#ffd59c",
@@ -31,7 +33,7 @@ const DEFAULT_CAT_APPEARANCE = {
 };
 
 const CAT_APPEARANCE_STORAGE_KEY = "cat-game:appearance";
-const ALLOWED_HATS = ["none", "beanie", "cap", "crown"];
+const ALLOWED_HATS = ["none", "beanie", "cap", "crown", "santa", "antlers"];
 const ALLOWED_BOOTS = ["none", "sneakers", "boots"];
 
 const cat = {
@@ -221,6 +223,16 @@ const multiplayerChatMessages = document.getElementById("multiplayer-chat-messag
 const multiplayerChatForm = document.getElementById("multiplayer-chat-form");
 const multiplayerChatInput = document.getElementById("multiplayer-chat-input");
 const multiplayerChatRoomLabel = document.getElementById("multiplayer-chat-room");
+
+if (HOLIDAY_MODE_ENABLED && document.body) {
+  document.body.classList.add("holiday-theme");
+  if (gameContainer && !gameContainer.querySelector(".holiday-garland")) {
+    const garland = document.createElement("div");
+    garland.className = "holiday-garland";
+    garland.setAttribute("aria-hidden", "true");
+    gameContainer.appendChild(garland);
+  }
+}
 
 let gameMode = "menu";
 let multiplayerManager = null;
@@ -1586,6 +1598,15 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function lightenColor(hex, amount = 0.1) {
+  const normalized = hex.replace("#", "");
+  const num = parseInt(normalized, 16);
+  const r = Math.min(255, Math.max(0, ((num >> 16) & 0xff) + 255 * amount));
+  const g = Math.min(255, Math.max(0, ((num >> 8) & 0xff) + 255 * amount));
+  const b = Math.min(255, Math.max(0, (num & 0xff) + 255 * amount));
+  return `#${((1 << 24) + (Math.round(r) << 16) + (Math.round(g) << 8) + Math.round(b)).toString(16).slice(1)}`;
+}
+
 function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -2401,6 +2422,58 @@ function drawHat(style, color, size, renderCtx = ctx) {
     ctxRef.arc(-size * 0.08, -size * 0.18, size * 0.025, 0, Math.PI * 2);
     ctxRef.arc(size * 0.08, -size * 0.18, size * 0.025, 0, Math.PI * 2);
     ctxRef.fill();
+  } else if (style === "santa") {
+    const gradient = ctxRef.createLinearGradient(0, -size * 0.35, 0, size * 0.05);
+    gradient.addColorStop(0, "#d3202f");
+    gradient.addColorStop(1, "#f64a57");
+    ctxRef.fillStyle = gradient;
+    ctxRef.beginPath();
+    ctxRef.arc(0, 0, size * 0.24, Math.PI, 0);
+    ctxRef.lineTo(size * 0.24, size * 0.02);
+    ctxRef.lineTo(-size * 0.1, -size * 0.38);
+    ctxRef.closePath();
+    ctxRef.fill();
+    ctxRef.stroke();
+
+    ctxRef.fillStyle = "#ffffff";
+    ctxRef.beginPath();
+    ctxRef.ellipse(0, size * 0.03, size * 0.26, size * 0.08, 0, 0, Math.PI * 2);
+    ctxRef.fill();
+    ctxRef.strokeStyle = "rgba(255, 255, 255, 0.8)";
+    ctxRef.stroke();
+
+    ctxRef.beginPath();
+    ctxRef.arc(-size * 0.12, -size * 0.38, size * 0.08, 0, Math.PI * 2);
+    ctxRef.fill();
+  } else if (style === "antlers") {
+    const antlerColor = "#8b5a2b";
+    ctxRef.strokeStyle = antlerColor;
+    ctxRef.lineWidth = 4;
+    const drawAntler = (direction) => {
+      ctxRef.save();
+      ctxRef.scale(direction, 1);
+      ctxRef.beginPath();
+      ctxRef.moveTo(size * 0.06, -size * 0.02);
+      ctxRef.lineTo(size * 0.12, -size * 0.26);
+      ctxRef.lineTo(size * 0.1, -size * 0.38);
+      ctxRef.moveTo(size * 0.12, -size * 0.26);
+      ctxRef.lineTo(size * 0.18, -size * 0.32);
+      ctxRef.moveTo(size * 0.12, -size * 0.22);
+      ctxRef.lineTo(size * 0.2, -size * 0.16);
+      ctxRef.stroke();
+      ctxRef.restore();
+    };
+
+    drawAntler(1);
+    drawAntler(-1);
+
+    ctxRef.fillStyle = "#f4d7a1";
+    ctxRef.strokeStyle = "rgba(0, 0, 0, 0.18)";
+    ctxRef.lineWidth = 1.6;
+    ctxRef.beginPath();
+    ctxRef.arc(0, -size * 0.12, size * 0.06, 0, Math.PI * 2);
+    ctxRef.fill();
+    ctxRef.stroke();
   }
 
   ctxRef.restore();
@@ -2546,16 +2619,23 @@ function drawCatSprite(catState, targetCtx = ctx) {
   renderCtx.arc(catState.size * 0.05, catState.size * 0.05, catState.size * 0.14, 0, Math.PI * 2);
   renderCtx.fill();
 
+  const isReindeerStyle = HOLIDAY_MODE_ENABLED && appearance.hat === "antlers";
+  const noseColor = isReindeerStyle ? "#d72638" : accessoryColor;
+
   // Nose and mouth
-  renderCtx.fillStyle = accessoryColor;
+  renderCtx.fillStyle = noseColor;
   renderCtx.beginPath();
-  renderCtx.moveTo(catState.size * 0.05, catState.size * 0.0);
-  renderCtx.lineTo(catState.size * 0.02, catState.size * 0.05);
-  renderCtx.lineTo(catState.size * 0.08, catState.size * 0.05);
-  renderCtx.closePath();
+  if (isReindeerStyle) {
+    renderCtx.arc(catState.size * 0.05, catState.size * 0.04, catState.size * 0.07, 0, Math.PI * 2);
+  } else {
+    renderCtx.moveTo(catState.size * 0.05, catState.size * 0.0);
+    renderCtx.lineTo(catState.size * 0.02, catState.size * 0.05);
+    renderCtx.lineTo(catState.size * 0.08, catState.size * 0.05);
+    renderCtx.closePath();
+  }
   renderCtx.fill();
 
-  renderCtx.strokeStyle = accessoryColor;
+  renderCtx.strokeStyle = noseColor;
   renderCtx.lineWidth = 1.8;
   renderCtx.beginPath();
   renderCtx.moveTo(catState.size * 0.05, catState.size * 0.05);
@@ -2746,13 +2826,48 @@ function drawWallsCollection(targetWalls) {
   }
 
   ctx.save();
-  ctx.fillStyle = "#4a5a6a";
-  ctx.strokeStyle = "#1f2a33";
-  ctx.lineWidth = 4;
-  targetWalls.forEach((wall) => {
-    ctx.fillRect(wall.x, wall.y, wall.width, wall.height);
-    ctx.strokeRect(wall.x, wall.y, wall.width, wall.height);
-  });
+
+  if (HOLIDAY_MODE_ENABLED) {
+    ctx.lineWidth = 3;
+    targetWalls.forEach((wall, index) => {
+      const primary = index % 2 === 0 ? "#2e7d32" : "#d3202f";
+      const accent = index % 2 === 0 ? "#a5d6a7" : "#ffcdd2";
+      const ribbon = "#fff7e6";
+      const gradient = ctx.createLinearGradient(wall.x, wall.y, wall.x, wall.y + wall.height);
+      gradient.addColorStop(0, lightenColor(primary, 0.12));
+      gradient.addColorStop(1, primary);
+
+      ctx.fillStyle = gradient;
+      ctx.strokeStyle = "rgba(20, 54, 93, 0.25)";
+      ctx.fillRect(wall.x, wall.y, wall.width, wall.height);
+      ctx.strokeRect(wall.x, wall.y, wall.width, wall.height);
+
+      ctx.fillStyle = ribbon;
+      const ribbonWidth = Math.max(8, wall.width * 0.08);
+      const ribbonHeight = Math.max(8, wall.height * 0.08);
+      ctx.fillRect(wall.x + wall.width / 2 - ribbonWidth / 2, wall.y, ribbonWidth, wall.height);
+      ctx.fillRect(wall.x, wall.y + wall.height / 2 - ribbonHeight / 2, wall.width, ribbonHeight);
+
+      ctx.fillStyle = accent;
+      ctx.beginPath();
+      ctx.roundRect(
+        wall.x + wall.width / 2 - ribbonWidth,
+        wall.y + wall.height / 2 - ribbonHeight,
+        ribbonWidth * 2,
+        ribbonHeight * 2,
+        6
+      );
+      ctx.fill();
+    });
+  } else {
+    ctx.fillStyle = "#4a5a6a";
+    ctx.strokeStyle = "#1f2a33";
+    ctx.lineWidth = 4;
+    targetWalls.forEach((wall) => {
+      ctx.fillRect(wall.x, wall.y, wall.width, wall.height);
+      ctx.strokeRect(wall.x, wall.y, wall.width, wall.height);
+    });
+  }
   ctx.restore();
 }
 
@@ -2766,26 +2881,53 @@ function drawPowerUpSprite(powerUpState) {
   ctx.translate(powerUpState.x, powerUpState.y);
   const size = powerUpState.size;
   const half = size / 2;
-  ctx.fillStyle = "#dba15d";
-  ctx.strokeStyle = "#8b5a2b";
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.rect(-half, -half, size, size);
-  ctx.fill();
-  ctx.stroke();
+  if (HOLIDAY_MODE_ENABLED) {
+    const bodyGradient = ctx.createLinearGradient(-half, -half, half, half);
+    bodyGradient.addColorStop(0, "#1e88e5");
+    bodyGradient.addColorStop(1, "#64b5f6");
+    ctx.fillStyle = bodyGradient;
+    ctx.strokeStyle = "rgba(20, 54, 93, 0.25)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(-half, -half, size, size, 8);
+    ctx.fill();
+    ctx.stroke();
 
-  ctx.strokeStyle = "rgba(99, 55, 15, 0.6)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(-half, -half);
-  ctx.lineTo(half, half);
-  ctx.moveTo(-half, half);
-  ctx.lineTo(half, -half);
-  ctx.moveTo(-half, 0);
-  ctx.lineTo(half, 0);
-  ctx.moveTo(0, -half);
-  ctx.lineTo(0, half);
-  ctx.stroke();
+    ctx.fillStyle = "#fff7e6";
+    const ribbon = size * 0.18;
+    ctx.fillRect(-ribbon / 2, -half, ribbon, size);
+    ctx.fillRect(-half, -ribbon / 2, size, ribbon);
+
+    ctx.fillStyle = "#ffca28";
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.12, -size * 0.12);
+    ctx.lineTo(0, -size * 0.22);
+    ctx.lineTo(size * 0.12, -size * 0.12);
+    ctx.lineTo(0, -size * 0.02);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.fillStyle = "#dba15d";
+    ctx.strokeStyle = "#8b5a2b";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.rect(-half, -half, size, size);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(99, 55, 15, 0.6)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-half, -half);
+    ctx.lineTo(half, half);
+    ctx.moveTo(-half, half);
+    ctx.lineTo(half, -half);
+    ctx.moveTo(-half, 0);
+    ctx.lineTo(half, 0);
+    ctx.moveTo(0, -half);
+    ctx.lineTo(0, half);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
