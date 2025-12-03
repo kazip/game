@@ -2953,6 +2953,21 @@ function drawPowerUp() {
   drawPowerUpSprite(powerUp);
 }
 
+function drawDisguisedPlayer(player) {
+  if (!player?.disguise) {
+    return;
+  }
+  const disguise = player.disguise || "memory";
+  drawPowerUpSprite({
+    active: true,
+    x: player.x,
+    y: player.y,
+    size: player.size || POWER_UP_BASE_SIZE,
+    remaining: POWER_UP_DURATION,
+    type: disguise
+  });
+}
+
 function drawMinesCollection(targetMines) {
   if (!targetMines || targetMines.length === 0) {
     return;
@@ -3128,6 +3143,9 @@ function applyMultiplayerStatePatch(previousState, patch) {
   if (patch.remaining !== undefined) {
     nextState.remaining = patch.remaining;
   }
+  if (patch.hidePhase !== undefined) {
+    nextState.hidePhase = patch.hidePhase;
+  }
   if (patch.goldenChainActive !== undefined) {
     nextState.goldenChainActive = patch.goldenChainActive;
   }
@@ -3198,6 +3216,7 @@ function normalizeMultiplayerPlayer(player) {
   normalized.size = Number(normalized.size) || CAT_BASE_SIZE;
   normalized.appearance = sanitizeAppearance(normalized.appearance);
   normalized.name = normalized.name || "Игрок";
+  normalized.disguise = typeof normalized.disguise === "string" ? normalized.disguise : "";
   return normalized;
 }
 
@@ -3605,7 +3624,11 @@ class MultiplayerManager {
       drawPowerUpSprite(this.state.powerUp);
         drawFishSprite(fish);
         players.forEach((player) => {
-          drawCatSprite(player);
+          if (this.mode === "hide-and-seek" && player.disguise) {
+            drawDisguisedPlayer(player);
+          } else {
+            drawCatSprite(player);
+          }
         });
       if (this.mode === "bomb-pass" && this.state.bombHolder) {
         const holder = players.find((player) => player.id === this.state.bombHolder);
@@ -3636,7 +3659,7 @@ class MultiplayerManager {
     if (!seekerId || seekerId !== this.playerId) {
       return false;
     }
-    return (this.state.remaining ?? 0) > 0;
+    return this.state.hidePhase === "hiding";
   }
 
   drawBlindfoldOverlay(viewSize) {

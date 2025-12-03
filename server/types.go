@@ -6,6 +6,8 @@ const (
 	worldSize             = 500.0
 	bombWorldScale        = 5.0
 	hideSeekWorldScale    = 3.0
+	hideSeekHideDuration  = 60.0
+	hideSeekSeekDuration  = 180.0
 	catSpeed              = 180.0
 	catSize               = 36.0
 	fishSize              = 28.0
@@ -78,6 +80,7 @@ type playerState struct {
 	StepAccum  float64       `json:"stepAccumulator"`
 	Score      int           `json:"score"`
 	Appearance catAppearance `json:"appearance"`
+	Disguise   string        `json:"disguise,omitempty"`
 }
 
 type fishState struct {
@@ -96,6 +99,7 @@ type gameState struct {
 	Phase      string         `json:"phase"`
 	Countdown  float64        `json:"countdown"`
 	Remaining  float64        `json:"remaining"`
+	HidePhase  string         `json:"hidePhase,omitempty"`
 	Message    string         `json:"message"`
 	SeekerID   string         `json:"seekerId"`
 	BombHolder string         `json:"bombHolder"`
@@ -179,6 +183,7 @@ type playerPatch struct {
 	StepAccum  *float64      `json:"stepAccumulator,omitempty"`
 	Score      *int          `json:"score,omitempty"`
 	Appearance catAppearance `json:"appearance,omitempty"`
+	Disguise   *string       `json:"disguise,omitempty"`
 }
 
 type statePatch struct {
@@ -186,6 +191,7 @@ type statePatch struct {
 	Phase          *string        `json:"phase,omitempty"`
 	Countdown      *float64       `json:"countdown,omitempty"`
 	Remaining      *float64       `json:"remaining,omitempty"`
+	HidePhase      *string        `json:"hidePhase,omitempty"`
 	Message        *string        `json:"message,omitempty"`
 	SeekerID       *string        `json:"seekerId,omitempty"`
 	BombHolder     *string        `json:"bombHolder,omitempty"`

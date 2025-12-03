@@ -86,6 +86,7 @@ func toProtocolPlayerState(p *playerState) protocol.PlayerState {
 		StepAccum:  p.StepAccum,
 		Score:      p.Score,
 		Appearance: appearance,
+		Disguise:   p.Disguise,
 	}
 }
 
@@ -117,6 +118,7 @@ func toProtocolGameState(state gameState) protocol.GameState {
 		Phase:      state.Phase,
 		Countdown:  state.Countdown,
 		Remaining:  state.Remaining,
+		HidePhase:  state.HidePhase,
 		Message:    state.Message,
 		SeekerID:   state.SeekerID,
 		BombHolder: state.BombHolder,
@@ -155,6 +157,10 @@ func toProtocolPlayerPatch(p playerPatch) protocol.PlayerPatch {
 		}
 		protoPatch.Appearance = &appearance
 	}
+	if p.Disguise != nil {
+		disguise := *p.Disguise
+		protoPatch.Disguise = &disguise
+	}
 	return protoPatch
 }
 
@@ -179,6 +185,9 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 			Remaining: patch.Status.Remaining,
 			PlayerID:  patch.Status.PlayerID,
 		}
+	}
+	if patch.HidePhase != nil {
+		protoPatch.HidePhase = stringPtr(*patch.HidePhase)
 	}
 	if patch.Fish != nil {
 		fish := protocol.FishState(*patch.Fish)
@@ -237,7 +246,7 @@ func (r *room) snapshotLocked() gameState {
 }
 
 func (p playerPatch) isEmpty() bool {
-	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && len(p.Appearance) == 0
+	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && len(p.Appearance) == 0 && p.Disguise == nil
 }
 
 func buildPlayerPatch(previous, current *playerState) *playerPatch {
@@ -281,6 +290,10 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 	if !appearanceEqual(previous, current) {
 		patch.Appearance = current.Appearance
 	}
+	if previous == nil || previous.Disguise != current.Disguise {
+		disguise := current.Disguise
+		patch.Disguise = &disguise
+	}
 	if patch.isEmpty() {
 		return nil
 	}
@@ -288,7 +301,7 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 }
 
 func (p *statePatch) isEmpty() bool {
-	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.Message == nil && p.SeekerID == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.PowerUps) == 0 && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
+	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.HidePhase == nil && p.Message == nil && p.SeekerID == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.PowerUps) == 0 && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
 }
 
 func buildStatePatch(previous, current gameState) *statePatch {
@@ -305,6 +318,9 @@ func buildStatePatch(previous, current gameState) *statePatch {
 	}
 	if floatChanged(previous.Remaining, current.Remaining) {
 		patch.Remaining = floatPtr(current.Remaining)
+	}
+	if previous.HidePhase != current.HidePhase {
+		patch.HidePhase = stringPtr(current.HidePhase)
 	}
 	if previous.Message != current.Message {
 		patch.Message = stringPtr(current.Message)
@@ -461,6 +477,7 @@ func (s *server) getOrCreateRoom(name, mode string) *room {
 		PowerUp:    powerUpState{Size: powerUpSize},
 		PowerUps:   nil,
 		Remaining:  roundDuration.Seconds(),
+		HidePhase:  "",
 		Message:    "Ожидаем игроков",
 		ServerTime: time.Now().UnixMilli(),
 	}
@@ -847,8 +864,20 @@ func (r *room) step() {
 		} else if r.isHideSeekMode() {
 			r.state.Remaining -= tickRate.Seconds()
 			r.updatePlayersLocked()
-			if r.state.Remaining <= 0 {
-				r.endRoundLocked("Время на запоминание закончилось")
+			if r.state.HidePhase == "hiding" {
+				if r.state.Remaining <= 0 {
+					r.startHideSeekSearchPhaseLocked()
+				}
+			} else {
+				r.handleHideSeekCapturesLocked()
+				if r.state.Remaining <= 0 {
+					r.state.WinnerID = r.pickAliveHiderLocked()
+					if r.state.WinnerID == "" {
+						r.state.WinnerID = r.state.SeekerID
+					}
+					r.endRoundLocked("Время на поиск закончилось")
+					return
+				}
 			}
 		} else {
 			r.state.Remaining -= tickRate.Seconds()
@@ -878,6 +907,8 @@ func (r *room) beginRoundLocked() {
 	r.state.Mines = nil
 	r.state.PowerUp = powerUpState{Size: powerUpSize}
 	r.state.SeekerID = ""
+	r.state.HidePhase = ""
+	r.state.WinnerID = ""
 	r.bombSlowTimers = make(map[string]float64)
 	r.resetBombPassHistoryLocked()
 	if r.isBombMode() {
@@ -893,13 +924,14 @@ func (r *room) beginRoundLocked() {
 		r.state.PowerUp.Active = false
 		r.state.PowerUps = r.spawnHideAndSeekItemsLocked()
 		r.state.Mines = nil
-		r.state.Remaining = 60
+		r.state.Remaining = hideSeekHideDuration
+		r.state.HidePhase = "hiding"
 		r.state.SeekerID = r.pickRandomSeekerLocked()
 		seekerName := "случайный котик"
 		if seeker, ok := r.players[r.state.SeekerID]; ok && seeker != nil {
 			seekerName = fallbackName(seeker.Name)
 		}
-		r.state.Message = fmt.Sprintf("Ведущий: %s. Запоминайте предметы!", seekerName)
+		r.state.Message = fmt.Sprintf("Ведущий: %s. У вас минута, чтобы спрятаться!", seekerName)
 		r.buildArenaWithWallsLocked()
 	} else {
 		r.spawnFishLocked()
@@ -907,6 +939,8 @@ func (r *room) beginRoundLocked() {
 	for _, p := range r.players {
 		p.Alive = true
 		p.Score = 0
+		p.Disguise = ""
+		p.Size = catSize
 	}
 	r.state.BombHolder = ""
 	r.state.BombTimer = bombTimerDuration
@@ -928,6 +962,21 @@ func (r *room) endRoundLocked(reason string) {
 }
 
 func (r *room) bestPlayerIDLocked() string {
+	if r.isHideSeekMode() {
+		if r.state.WinnerID != "" {
+			return r.state.WinnerID
+		}
+		if r.state.HidePhase == "seeking" {
+			hider := r.pickAliveHiderLocked()
+			if hider != "" {
+				return hider
+			}
+			if r.state.SeekerID != "" {
+				return r.state.SeekerID
+			}
+		}
+	}
+
 	var best *playerState
 	if r.isBombMode() {
 		for _, p := range r.players {
@@ -977,6 +1026,8 @@ func (r *room) updatePlayersLocked() {
 
 		if r.isBombMode() {
 			r.collectBombPowerUpsLocked(p)
+		} else if r.isHideSeekMode() {
+			r.handleHideSeekDisguiseLocked(p)
 		} else if r.state.PowerUp.Active {
 			dist := math.Hypot(p.X-r.state.PowerUp.X, p.Y-r.state.PowerUp.Y)
 			if dist < (p.Size+r.state.PowerUp.Size)/2 {
@@ -1210,6 +1261,87 @@ func (r *room) spawnHideAndSeekItemsLocked() []powerUpState {
 		items = append(items, powerUpState{X: x, Y: y, Size: powerUpSize, Active: true, Remaining: 60, Type: "memory"})
 	}
 	return items
+}
+
+func (r *room) handleHideSeekDisguiseLocked(p *playerState) {
+	if !r.isHideSeekMode() || r.state.HidePhase != "hiding" {
+		return
+	}
+	if p == nil || !p.Alive || p.ID == r.state.SeekerID {
+		return
+	}
+	for _, item := range r.state.PowerUps {
+		if !item.Active {
+			continue
+		}
+		dist := math.Hypot(p.X-item.X, p.Y-item.Y)
+		if dist <= (p.Size+item.Size)/2 {
+			p.Disguise = item.Type
+			p.Size = item.Size
+			return
+		}
+	}
+}
+
+func (r *room) countRemainingHidersLocked() int {
+	count := 0
+	for id, player := range r.players {
+		if id == r.state.SeekerID {
+			continue
+		}
+		if player != nil && player.Alive {
+			count++
+		}
+	}
+	return count
+}
+
+func (r *room) startHideSeekSearchPhaseLocked() {
+	r.state.HidePhase = "seeking"
+	r.state.Remaining = hideSeekSeekDuration
+	r.state.Message = "Время вышло! Ведущий начинает поиск."
+}
+
+func (r *room) handleHideSeekCapturesLocked() {
+	if !r.isHideSeekMode() || r.state.HidePhase != "seeking" {
+		return
+	}
+	seeker, ok := r.players[r.state.SeekerID]
+	if !ok || seeker == nil || !seeker.Alive {
+		return
+	}
+	for id, player := range r.players {
+		if id == seeker.ID || player == nil || !player.Alive {
+			continue
+		}
+		dist := math.Hypot(seeker.X-player.X, seeker.Y-player.Y)
+		if dist <= (seeker.Size+player.Size)/2 {
+			player.Alive = false
+			player.Moving = false
+			player.Disguise = ""
+			player.Size = catSize
+			seeker.Score++
+			remaining := r.countRemainingHidersLocked()
+			if remaining == 0 {
+				r.state.WinnerID = seeker.ID
+				r.endRoundLocked("Ведущий нашёл всех!")
+				return
+			}
+			r.state.Message = fmt.Sprintf("%s нашёл игрока! Осталось спрятанных: %d", fallbackName(seeker.Name), remaining)
+		}
+	}
+}
+
+func (r *room) pickAliveHiderLocked() string {
+	for id, player := range r.players {
+		if id == r.state.SeekerID {
+			continue
+		}
+		if player != nil && player.Alive {
+			return id
+		}
+	}
+	return ""
 }
 
 func (r *room) updateBombPassLocked() {
