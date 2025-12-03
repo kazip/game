@@ -204,14 +204,14 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 		}
 		protoPatch.PowerUps = powerUps
 	}
-	if len(patch.Walls) > 0 {
+	if patch.Walls != nil {
 		walls := make([]protocol.Wall, len(patch.Walls))
 		for i, w := range patch.Walls {
 			walls[i] = protocol.Wall{X: w.X, Y: w.Y, Width: w.Width, Height: w.Height}
 		}
 		protoPatch.Walls = walls
 	}
-	if len(patch.Mines) > 0 {
+	if patch.Mines != nil {
 		mines := make([]protocol.Mine, len(patch.Mines))
 		for i, m := range patch.Mines {
 			mines[i] = protocol.Mine{X: m.X, Y: m.Y, Size: m.Size}
@@ -301,7 +301,7 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 }
 
 func (p *statePatch) isEmpty() bool {
-	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.HidePhase == nil && p.Message == nil && p.SeekerID == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.PowerUps) == 0 && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
+	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.HidePhase == nil && p.Message == nil && p.SeekerID == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && p.PowerUps == nil && p.Walls == nil && p.Mines == nil && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
 }
 
 func buildStatePatch(previous, current gameState) *statePatch {
@@ -363,10 +363,18 @@ func buildStatePatch(previous, current gameState) *statePatch {
 		}
 	}
 	if !wallsEqual(previous.Walls, current.Walls) {
-		patch.Walls = cloneWalls(current.Walls)
+		if len(current.Walls) == 0 {
+			patch.Walls = []wall{}
+		} else {
+			patch.Walls = cloneWalls(current.Walls)
+		}
 	}
 	if !minesEqual(previous.Mines, current.Mines) {
-		patch.Mines = cloneMines(current.Mines)
+		if len(current.Mines) == 0 {
+			patch.Mines = []mine{}
+		} else {
+			patch.Mines = cloneMines(current.Mines)
+		}
 	}
 
 	prevPlayers := make(map[string]*playerState)
