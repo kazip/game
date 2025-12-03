@@ -3185,12 +3185,20 @@ function applyMultiplayerStatePatch(previousState, patch) {
           merged[key] = value;
         }
       });
-      playerMap.set(update.id, merged);
+      playerMap.set(update.id, normalizeMultiplayerPlayer(merged));
     });
   }
-  nextState.players = Array.from(playerMap.values());
+  nextState.players = Array.from(playerMap.values()).map(normalizeMultiplayerPlayer);
 
   return nextState;
+}
+
+function normalizeMultiplayerPlayer(player) {
+  const normalized = { ...player };
+  normalized.size = Number(normalized.size) || CAT_BASE_SIZE;
+  normalized.appearance = sanitizeAppearance(normalized.appearance);
+  normalized.name = normalized.name || "Игрок";
+  return normalized;
 }
 
 class MultiplayerManager {
@@ -3426,6 +3434,9 @@ class MultiplayerManager {
     }
     if (!nextState) {
       return;
+    }
+    if (Array.isArray(nextState.players)) {
+      nextState.players = nextState.players.map(normalizeMultiplayerPlayer);
     }
     const now = performance.now();
     this.previousRenderState = previousState || nextState;
