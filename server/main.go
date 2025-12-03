@@ -118,6 +118,7 @@ func toProtocolGameState(state gameState) protocol.GameState {
 		Countdown:  state.Countdown,
 		Remaining:  state.Remaining,
 		Message:    state.Message,
+		SeekerID:   state.SeekerID,
 		BombHolder: state.BombHolder,
 		BombTimer:  state.BombTimer,
 		Players:    players,
@@ -167,6 +168,7 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 	protoPatch.Countdown = patch.Countdown
 	protoPatch.Remaining = patch.Remaining
 	protoPatch.Message = patch.Message
+	protoPatch.SeekerID = patch.SeekerID
 	protoPatch.BombHolder = patch.BombHolder
 	protoPatch.BombTimer = patch.BombTimer
 	protoPatch.WinnerID = patch.WinnerID
@@ -286,7 +288,7 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 }
 
 func (p *statePatch) isEmpty() bool {
-	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.Message == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.PowerUps) == 0 && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
+	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.Message == nil && p.SeekerID == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && len(p.PowerUps) == 0 && len(p.Walls) == 0 && len(p.Mines) == 0 && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
 }
 
 func buildStatePatch(previous, current gameState) *statePatch {
@@ -306,6 +308,9 @@ func buildStatePatch(previous, current gameState) *statePatch {
 	}
 	if previous.Message != current.Message {
 		patch.Message = stringPtr(current.Message)
+	}
+	if previous.SeekerID != current.SeekerID {
+		patch.SeekerID = stringPtr(current.SeekerID)
 	}
 	if previous.BombHolder != current.BombHolder {
 		patch.BombHolder = stringPtr(current.BombHolder)
@@ -417,6 +422,8 @@ func normalizeMode(mode string) string {
 	switch mode {
 	case "bomb-pass":
 		return mode
+	case "hide-and-seek":
+		return mode
 	default:
 		return "classic"
 	}
@@ -432,6 +439,8 @@ func (s *server) getOrCreateRoom(name, mode string) *room {
 	world := worldSize
 	if normalizedMode == "bomb-pass" {
 		world = worldSize * bombWorldScale
+	} else if normalizedMode == "hide-and-seek" {
+		world = worldSize * hideSeekWorldScale
 	}
 	r := &room{
 		name:             name,
@@ -835,6 +844,12 @@ func (r *room) step() {
 			r.updatePlayersLocked()
 			r.updateBombPowerUpLocked()
 			r.updateBombPassLocked()
+		} else if r.isHideSeekMode() {
+			r.state.Remaining -= tickRate.Seconds()
+			r.updatePlayersLocked()
+			if r.state.Remaining <= 0 {
+				r.endRoundLocked("Время на запоминание закончилось")
+			}
 		} else {
 			r.state.Remaining -= tickRate.Seconds()
 			r.updatePowerUpLocked()
@@ -862,6 +877,7 @@ func (r *room) beginRoundLocked() {
 	r.state.Walls = nil
 	r.state.Mines = nil
 	r.state.PowerUp = powerUpState{Size: powerUpSize}
+	r.state.SeekerID = ""
 	r.bombSlowTimers = make(map[string]float64)
 	r.resetBombPassHistoryLocked()
 	if r.isBombMode() {
@@ -872,6 +888,18 @@ func (r *room) beginRoundLocked() {
 		r.buildBombPassArenaLocked()
 		r.bombPowerUpTimer = 0
 		r.updateBombPowerUpLocked()
+	} else if r.isHideSeekMode() {
+		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
+		r.state.PowerUp.Active = false
+		r.state.PowerUps = r.spawnHideAndSeekItemsLocked()
+		r.state.Mines = nil
+		r.state.Remaining = 60
+		r.state.SeekerID = r.pickRandomSeekerLocked()
+		seekerName := "случайный котик"
+		if seeker, ok := r.players[r.state.SeekerID]; ok && seeker != nil {
+			seekerName = fallbackName(seeker.Name)
+		}
+		r.state.Message = fmt.Sprintf("Ведущий: %s. Запоминайте предметы!", seekerName)
 	} else {
 		r.spawnFishLocked()
 	}
@@ -994,9 +1022,16 @@ func (r *room) isBombMode() bool {
 	return r.state.Mode == "bomb-pass"
 }
 
+func (r *room) isHideSeekMode() bool {
+	return r.state.Mode == "hide-and-seek"
+}
+
 func (r *room) currentWorldSize() float64 {
 	if r.isBombMode() {
 		return worldSize * bombWorldScale
+	}
+	if r.isHideSeekMode() {
+		return worldSize * hideSeekWorldScale
 	}
 	return worldSize
 }
@@ -1143,6 +1178,37 @@ func (r *room) handleBombTransferLocked() {
 			return
 		}
 	}
+}
+
+func (r *room) pickRandomSeekerLocked() string {
+	candidates := r.alivePlayersLocked()
+	if len(candidates) == 0 {
+		for _, p := range r.players {
+			candidates = append(candidates, p)
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	picked := candidates[rand.Intn(len(candidates))]
+	return picked.ID
+}
+
+func (r *room) spawnHideAndSeekItemsLocked() []powerUpState {
+	totalPlayers := len(r.players)
+	if totalPlayers == 0 {
+		return nil
+	}
+	count := totalPlayers * 3
+	world := r.currentWorldSize()
+	items := make([]powerUpState, 0, count)
+	margin := 20.0
+	for i := 0; i < count; i++ {
+		x := rand.Float64()*(world-2*margin) + margin
+		y := rand.Float64()*(world-2*margin) + margin
+		items = append(items, powerUpState{X: x, Y: y, Size: powerUpSize, Active: true, Remaining: 60, Type: "memory"})
+	}
+	return items
 }
 
 func (r *room) updateBombPassLocked() {

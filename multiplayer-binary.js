@@ -271,6 +271,7 @@ export function encodeStateToBase64(state) {
   writer.writeBool(Boolean(state.goldenChainActive));
   writer.writeString(state.winnerId || "");
   writer.writeString(state.message || "");
+  writer.writeString(state.seekerId || "");
   writer.writeString(state.bombHolder || "");
   writer.writeFloat32(state.bombTimer || 0);
 
@@ -359,6 +360,7 @@ function decodeFullState(reader) {
   const goldenChainActive = reader.readBool();
   const winnerId = reader.readString();
   const message = reader.readString();
+  const seekerId = reader.readString();
   const bombHolder = reader.readString();
   const bombTimer = reader.readFloat32();
   const statusType = reader.readString();
@@ -400,6 +402,7 @@ function decodeFullState(reader) {
       countdown,
       remaining,
       message,
+      seekerId,
       bombHolder,
       bombTimer,
       winnerId: winnerId || null,
@@ -467,6 +470,9 @@ function decodePatch(reader) {
   }
   if (flags3 & (1 << 0)) {
     patch.powerUps = decodePowerUps(reader);
+  }
+  if (flags3 & (1 << 1)) {
+    patch.seekerId = reader.readString();
   }
   if (flags2 & (1 << 1)) {
     patch.walls = decodeWalls(reader);

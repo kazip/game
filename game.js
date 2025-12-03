@@ -7,6 +7,8 @@ const WORLD_SIZE = 500;
 const VIEW_SIZE = WORLD_SIZE;
 const BOMB_WORLD_MULTIPLIER = 5;
 const BOMB_MODE_WORLD_SIZE = WORLD_SIZE * BOMB_WORLD_MULTIPLIER;
+const HIDE_SEEK_WORLD_MULTIPLIER = 3;
+const HIDE_SEEK_WORLD_SIZE = WORLD_SIZE * HIDE_SEEK_WORLD_MULTIPLIER;
 const MIN_BOARD_SIZE = 260;
 const GRID_SIZE = 10;
 const GRID_CELL_SIZE = WORLD_SIZE / GRID_SIZE;
@@ -130,7 +132,23 @@ function getViewportSize() {
 }
 
 function getWorldSizeForMode(mode) {
-  return mode === "bomb-pass" ? BOMB_MODE_WORLD_SIZE : WORLD_SIZE;
+  if (mode === "bomb-pass") {
+    return BOMB_MODE_WORLD_SIZE;
+  }
+  if (mode === "hide-and-seek") {
+    return HIDE_SEEK_WORLD_SIZE;
+  }
+  return WORLD_SIZE;
+}
+
+function getModeLabel(mode) {
+  if (mode === "bomb-pass") {
+    return "Бомба-пас";
+  }
+  if (mode === "hide-and-seek") {
+    return "Прятки";
+  }
+  return "Охота за рыбкой";
 }
 
 const TIMER_MODES = {
@@ -707,7 +725,7 @@ function renderMultiplayerRoomList() {
     item.classList.toggle("unavailable", !isJoinable);
     const meta = document.createElement("div");
     meta.className = "multiplayer-room-meta";
-    const modeLabel = room.mode === "bomb-pass" ? "Бомба-пас" : "Охота за рыбкой";
+    const modeLabel = getModeLabel(room.mode);
     meta.innerHTML = `
       <span class="multiplayer-room-name">${escapeHtml(room.roomName)}</span>
       <span class="multiplayer-room-status">Игроков: ${room.playerCount} · Режим: ${modeLabel} · Статус: ${
@@ -3116,6 +3134,9 @@ function applyMultiplayerStatePatch(previousState, patch) {
   if (patch.message !== undefined) {
     nextState.message = patch.message;
   }
+  if (patch.seekerId !== undefined) {
+    nextState.seekerId = patch.seekerId;
+  }
   if (patch.bombHolder !== undefined) {
     nextState.bombHolder = patch.bombHolder;
   }
@@ -3547,7 +3568,8 @@ class MultiplayerManager {
     }
 
     let camera = null;
-    if (this.state && this.mode === "bomb-pass") {
+    const isExpandedWorld = worldSize > viewSize;
+    if (this.state && isExpandedWorld) {
       const focusPlayer = this.getCameraTarget(players);
       if (focusPlayer) {
         camera = getCameraOrigin(focusPlayer, worldSize, viewSize);
@@ -3580,7 +3602,7 @@ class MultiplayerManager {
       ctx.restore();
     }
 
-    if (this.state && this.mode === "bomb-pass") {
+    if (this.state && isExpandedWorld) {
       drawMinimap(players, this.state.walls || [], worldSize, viewSize, camera);
     }
     multiplayerRenderHandle = requestAnimationFrame(this.renderFrameBound);
@@ -3816,7 +3838,7 @@ class MultiplayerManager {
       multiplayerHudRoom.textContent = this.roomName;
     }
     if (multiplayerHudMode) {
-      multiplayerHudMode.textContent = this.mode === "bomb-pass" ? "Бомба-пас" : "Охота за рыбкой";
+      multiplayerHudMode.textContent = getModeLabel(this.mode);
     }
     const phase = this.state.phase;
     const isBombMode = this.mode === "bomb-pass";
