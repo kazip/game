@@ -885,7 +885,7 @@ func (r *room) beginRoundLocked() {
 		r.state.PowerUp.Active = false
 		r.state.PowerUps = nil
 		r.state.Mines = nil
-		r.buildBombPassArenaLocked()
+		r.buildArenaWithWallsLocked()
 		r.bombPowerUpTimer = 0
 		r.updateBombPowerUpLocked()
 	} else if r.isHideSeekMode() {
@@ -900,6 +900,7 @@ func (r *room) beginRoundLocked() {
 			seekerName = fallbackName(seeker.Name)
 		}
 		r.state.Message = fmt.Sprintf("Ведущий: %s. Запоминайте предметы!", seekerName)
+		r.buildArenaWithWallsLocked()
 	} else {
 		r.spawnFishLocked()
 	}
@@ -1037,21 +1038,21 @@ func (r *room) currentWorldSize() float64 {
 }
 
 func (r *room) wallThicknessRate() float64 {
-	if r.isBombMode() {
+	if r.isBombMode() || r.isHideSeekMode() {
 		return bombWallThicknessRate
 	}
 	return wallThicknessRate
 }
 
 func (r *room) maxWallTotalLen() int {
-	if r.isBombMode() {
+	if r.isBombMode() || r.isHideSeekMode() {
 		return bombMaxWallTotalLen
 	}
 	return maxWallTotalLen
 }
 
 func (r *room) maxSegments() int {
-	if r.isBombMode() {
+	if r.isBombMode() || r.isHideSeekMode() {
 		return bombMaxSegments
 	}
 	return maxSegments
@@ -1581,7 +1582,7 @@ func (r *room) handlePowerUpAfterWallChangeLocked() {
 	}
 }
 
-func (r *room) buildBombPassArenaLocked() {
+func (r *room) buildArenaWithWallsLocked() {
 	world := r.currentWorldSize()
 	layout := r.buildBoundaryWalls(world)
 

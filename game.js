@@ -3560,6 +3560,12 @@ class MultiplayerManager {
     const viewSize = getViewportSize();
     const worldSize = this.worldSize || WORLD_SIZE;
     prepareCanvasForFrame(viewSize);
+    const seekerBlindfolded = this.isSeekerBlindfolded();
+    if (seekerBlindfolded) {
+      this.drawBlindfoldOverlay(viewSize);
+      multiplayerRenderHandle = requestAnimationFrame(this.renderFrameBound);
+      return;
+    }
     let players = [];
     let fish = null;
     if (this.state) {
@@ -3606,6 +3612,38 @@ class MultiplayerManager {
       drawMinimap(players, this.state.walls || [], worldSize, viewSize, camera);
     }
     multiplayerRenderHandle = requestAnimationFrame(this.renderFrameBound);
+  }
+
+  isSeekerBlindfolded() {
+    if (this.mode !== "hide-and-seek" || !this.state) {
+      return false;
+    }
+    if (this.state.phase !== "playing") {
+      return false;
+    }
+    const seekerId = this.state.seekerId;
+    if (!seekerId || seekerId !== this.playerId) {
+      return false;
+    }
+    return (this.state.remaining ?? 0) > 0;
+  }
+
+  drawBlindfoldOverlay(viewSize) {
+    ctx.save();
+    ctx.fillStyle = "rgba(6, 12, 24, 0.95)";
+    ctx.fillRect(0, 0, viewSize, viewSize);
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.font = "24px Inter, system-ui, sans-serif";
+    const remaining = Math.max(0, Math.ceil(this.state?.remaining ?? 0));
+    const lines = [
+      "Вы ведущий и пока ничего не видите.",
+      `Подождите ${remaining} сек., чтобы начать поиск.`
+    ];
+    lines.forEach((line, index) => {
+      ctx.fillText(line, viewSize / 2, viewSize / 2 + index * 32);
+    });
+    ctx.restore();
   }
 
   getCameraTarget(players = []) {
