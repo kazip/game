@@ -3,7 +3,7 @@ const decoder = new TextDecoder();
 
 const PHASE_CODES = { lobby: 0, countdown: 1, playing: 2, ended: 3 };
 const FISH_TYPE_CODES = { normal: 0, golden: 1, timeIncrease: 2, timeDecrease: 3 };
-const POWER_UP_TYPE_CODES = { none: 0, fast: 1, slow: 2, invert: 3 };
+const POWER_UP_TYPE_CODES = { none: 0, fast: 1, slow: 2, invert: 3, memory: 4 };
 const MESSAGE_TYPES = { full: 0, patch: 1 };
 
 class BinaryWriter {
@@ -223,6 +223,7 @@ function encodePlayers(players = [], writer) {
     writer.writeFloat32(player.stepAccumulator || 0);
     const appearance = player.appearance ? JSON.stringify(player.appearance).slice(0, 300) : "";
     writer.writeString(appearance || "");
+    writer.writeString(player.disguise || "");
   });
 }
 
@@ -243,7 +244,8 @@ function decodePlayers(reader) {
       moving: reader.readBool(),
       walkCycle: reader.readFloat32(),
       stepAccumulator: reader.readFloat32(),
-      appearance: {}
+      appearance: {},
+      disguise: reader.readString()
     };
     const appearanceString = reader.readString();
     if (appearanceString) {
@@ -268,6 +270,7 @@ export function encodeStateToBase64(state) {
   writer.writeUint8(PHASE_CODES[state.phase] ?? 0);
   writer.writeFloat32(state.countdown || 0);
   writer.writeFloat32(state.remaining || 0);
+  writer.writeString(state.hidePhase || "");
   writer.writeBool(Boolean(state.goldenChainActive));
   writer.writeString(state.winnerId || "");
   writer.writeString(state.message || "");
@@ -346,6 +349,7 @@ function decodePlayerPatch(reader) {
       patch.appearance = {};
     }
   }
+  if (flags2 & (1 << 4)) patch.disguise = reader.readString();
   return patch;
 }
 
@@ -357,6 +361,7 @@ function decodeFullState(reader) {
   const phaseCode = reader.readUint8();
   const countdown = reader.readFloat32();
   const remaining = reader.readFloat32();
+  const hidePhase = reader.readString();
   const goldenChainActive = reader.readBool();
   const winnerId = reader.readString();
   const message = reader.readString();
@@ -401,6 +406,7 @@ function decodeFullState(reader) {
       mode,
       countdown,
       remaining,
+      hidePhase,
       message,
       seekerId,
       bombHolder,
@@ -473,6 +479,9 @@ function decodePatch(reader) {
   }
   if (flags3 & (1 << 1)) {
     patch.seekerId = reader.readString();
+  }
+  if (flags3 & (1 << 2)) {
+    patch.hidePhase = reader.readString();
   }
   if (flags2 & (1 << 1)) {
     patch.walls = decodeWalls(reader);

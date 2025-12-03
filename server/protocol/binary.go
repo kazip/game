@@ -10,7 +10,7 @@ import (
 var (
 	phaseCodes       = map[string]uint8{"lobby": 0, "countdown": 1, "playing": 2, "ended": 3}
 	fishTypeCodes    = map[string]uint8{"normal": 0, "golden": 1, "timeIncrease": 2, "timeDecrease": 3}
-	powerUpTypeCodes = map[string]uint8{"none": 0, "fast": 1, "slow": 2, "invert": 3}
+	powerUpTypeCodes = map[string]uint8{"none": 0, "fast": 1, "slow": 2, "invert": 3, "memory": 4}
 
 	messageTypeFull  uint8 = 0
 	messageTypePatch uint8 = 1
@@ -200,6 +200,7 @@ func encodePlayersBinary(players []PlayerState, writer *binaryWriter) {
 			appearance = appearance[:300]
 		}
 		writer.writeString(appearance)
+		writer.writeString(p.Disguise)
 	}
 }
 
@@ -213,6 +214,7 @@ func EncodeState(state GameState) []byte {
 	writer.writeUint8(phaseCodes[state.Phase])
 	writer.writeFloat32(float32(state.Countdown))
 	writer.writeFloat32(float32(state.Remaining))
+	writer.writeString(state.HidePhase)
 	writer.writeBool(state.Golden)
 	writer.writeString(state.WinnerID)
 	writer.writeString(state.Message)
@@ -295,6 +297,9 @@ func encodePlayerPatchBinary(p PlayerPatch, writer *binaryWriter) {
 	if p.Appearance != nil {
 		flags2 |= 1 << 3
 	}
+	if p.Disguise != nil {
+		flags2 |= 1 << 4
+	}
 
 	writer.writeUint8(flags1)
 	writer.writeUint8(flags2)
@@ -338,6 +343,9 @@ func encodePlayerPatchBinary(p PlayerPatch, writer *binaryWriter) {
 			appearance = appearance[:300]
 		}
 		writer.writeString(appearance)
+	}
+	if p.Disguise != nil {
+		writer.writeString(*p.Disguise)
 	}
 }
 
@@ -404,6 +412,12 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 	if len(patch.PowerUps) > 0 {
 		flags3 |= 1 << 0
 	}
+	if patch.SeekerID != nil {
+		flags3 |= 1 << 1
+	}
+	if patch.HidePhase != nil {
+		flags3 |= 1 << 2
+	}
 
 	writer.writeUint8(flags1)
 	writer.writeUint8(flags2)
@@ -451,6 +465,12 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 	}
 	if len(patch.PowerUps) > 0 {
 		encodePowerUpsBinary(patch.PowerUps, writer)
+	}
+	if patch.SeekerID != nil {
+		writer.writeString(*patch.SeekerID)
+	}
+	if patch.HidePhase != nil {
+		writer.writeString(*patch.HidePhase)
 	}
 	if len(patch.Walls) > 0 {
 		encodeWallsBinary(patch.Walls, writer)
