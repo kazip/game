@@ -216,6 +216,7 @@ func EncodeState(state GameState) []byte {
 	writer.writeBool(state.Golden)
 	writer.writeString(state.WinnerID)
 	writer.writeString(state.Message)
+	writer.writeString(state.SeekerID)
 	writer.writeString(state.BombHolder)
 	writer.writeFloat32(float32(state.BombTimer))
 

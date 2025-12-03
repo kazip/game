@@ -66,6 +66,7 @@ type GameState struct {
 	Countdown  float64        `json:"countdown"`
 	Remaining  float64        `json:"remaining"`
 	Message    string         `json:"message"`
+	SeekerID   string         `json:"seekerId"`
 	BombHolder string         `json:"bombHolder"`
 	BombTimer  float64        `json:"bombTimer"`
 	Players    []PlayerState  `json:"players"`
@@ -103,6 +104,7 @@ type StatePatch struct {
 	Countdown      *float64       `json:"countdown,omitempty"`
 	Remaining      *float64       `json:"remaining,omitempty"`
 	Message        *string        `json:"message,omitempty"`
+	SeekerID       *string        `json:"seekerId,omitempty"`
 	BombHolder     *string        `json:"bombHolder,omitempty"`
 	BombTimer      *float64       `json:"bombTimer,omitempty"`
 	WinnerID       *string        `json:"winnerId,omitempty"`
