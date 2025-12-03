@@ -3458,7 +3458,17 @@ class MultiplayerManager {
       nextState.players = nextState.players.map(normalizeMultiplayerPlayer);
     }
     const now = performance.now();
-    this.previousRenderState = previousState || nextState;
+
+    if (nextState?.walls) {
+      nextState.walls = nextState.walls.map((wall) => ({ ...wall }));
+    }
+
+    const previousWithTimestamp = previousState ? { ...previousState, timestamp: now } : null;
+    if (previousWithTimestamp?.walls) {
+      previousWithTimestamp.walls = previousWithTimestamp.walls.map((wall) => ({ ...wall }));
+    }
+
+    this.previousRenderState = previousWithTimestamp || nextState;
     this.smoothingStartTime = now;
     this.state = nextState;
     this.mode = nextState.mode || this.mode;
@@ -3614,11 +3624,13 @@ class MultiplayerManager {
       }
     }
 
+    const walls = this.state?.walls || this.previousRenderState?.walls || [];
+
     if (this.state) {
       if (this.mode === "bomb-pass") {
         drawBombPassBackground(worldSize);
       }
-      drawWallsCollection(this.state.walls || []);
+      drawWallsCollection(walls);
       drawMinesCollection(this.state.mines || []);
       (this.state.powerUps || []).forEach((powerUpState) => drawPowerUpSprite(powerUpState));
       drawPowerUpSprite(this.state.powerUp);
@@ -3643,7 +3655,7 @@ class MultiplayerManager {
     }
 
     if (this.state && isExpandedWorld) {
-      drawMinimap(players, this.state.walls || [], worldSize, viewSize, camera);
+      drawMinimap(players, walls, worldSize, viewSize, camera);
     }
     multiplayerRenderHandle = requestAnimationFrame(this.renderFrameBound);
   }
