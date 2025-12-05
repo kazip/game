@@ -1307,7 +1307,7 @@ func (r *room) countRemainingHidersLocked() int {
 func (r *room) startHideSeekSearchPhaseLocked() {
 	r.state.HidePhase = "seeking"
 	r.state.Remaining = hideSeekSeekDuration
-	r.state.Message = "Время вышло! Ведущий начинает поиск."
+	r.state.Message = "Время вышло! Ведущий начинает поиск: подходите к предметам и касайтесь их, чтобы проверить. На поиски — 3 минуты."
 }
 
 func (r *room) handleHideSeekCapturesLocked() {
@@ -1318,12 +1318,15 @@ func (r *room) handleHideSeekCapturesLocked() {
 	if !ok || seeker == nil || !seeker.Alive {
 		return
 	}
+
+	touchesObject := func(x, y, size float64) bool {
+		return math.Hypot(seeker.X-x, seeker.Y-y) <= (seeker.Size+size)/2
+	}
 	for id, player := range r.players {
 		if id == seeker.ID || player == nil || !player.Alive {
 			continue
 		}
-		dist := math.Hypot(seeker.X-player.X, seeker.Y-player.Y)
-		if dist <= (seeker.Size+player.Size)/2 {
+		if touchesObject(player.X, player.Y, player.Size) {
 			player.Alive = false
 			player.Moving = false
 			player.Disguise = ""
