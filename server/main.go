@@ -55,6 +55,14 @@ func quantizeStateForSend(state *gameState) {
 		state.Mines[i].Size = quantizeCoord(state.Mines[i].Size)
 	}
 
+	for i := range state.Shots {
+		state.Shots[i].FromX = quantizeCoord(state.Shots[i].FromX)
+		state.Shots[i].FromY = quantizeCoord(state.Shots[i].FromY)
+		state.Shots[i].ToX = quantizeCoord(state.Shots[i].ToX)
+		state.Shots[i].ToY = quantizeCoord(state.Shots[i].ToY)
+		state.Shots[i].Remaining = quantizeSeconds(state.Shots[i].Remaining)
+	}
+
 	for _, p := range state.Players {
 		quantizePlayerForSend(p)
 	}
@@ -110,6 +118,10 @@ func toProtocolGameState(state gameState) protocol.GameState {
 	for i, p := range state.PowerUps {
 		powerUps[i] = protocol.PowerUpState(p)
 	}
+	shots := make([]protocol.ShotEvent, len(state.Shots))
+	for i, s := range state.Shots {
+		shots[i] = protocol.ShotEvent{ShooterID: s.ShooterID, FromX: s.FromX, FromY: s.FromY, ToX: s.ToX, ToY: s.ToY, Remaining: s.Remaining}
+	}
 	var status *protocol.StatusEffect
 	if state.Status != nil {
 		status = &protocol.StatusEffect{Type: state.Status.Type, Remaining: state.Status.Remaining, PlayerID: state.Status.PlayerID}
@@ -133,6 +145,7 @@ func toProtocolGameState(state gameState) protocol.GameState {
 		Mines:      mines,
 		PowerUp:    protocol.PowerUpState(state.PowerUp),
 		PowerUps:   powerUps,
+		Shots:      shots,
 		Status:     status,
 		WinnerID:   state.WinnerID,
 		Golden:     state.Golden,
@@ -214,6 +227,13 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 		}
 		protoPatch.PowerUps = powerUps
 	}
+	if patch.Shots != nil {
+		shots := make([]protocol.ShotEvent, len(patch.Shots))
+		for i, s := range patch.Shots {
+			shots[i] = protocol.ShotEvent{ShooterID: s.ShooterID, FromX: s.FromX, FromY: s.FromY, ToX: s.ToX, ToY: s.ToY, Remaining: s.Remaining}
+		}
+		protoPatch.Shots = shots
+	}
 	if patch.Walls != nil {
 		walls := make([]protocol.Wall, len(patch.Walls))
 		for i, w := range patch.Walls {
@@ -252,6 +272,7 @@ func (r *room) snapshotLocked() gameState {
 	stateCopy.Walls = cloneWalls(r.state.Walls)
 	stateCopy.Mines = cloneMines(r.state.Mines)
 	stateCopy.PowerUps = clonePowerUps(r.state.PowerUps)
+	stateCopy.Shots = cloneShots(r.state.Shots)
 	return stateCopy
 }
 
@@ -317,7 +338,7 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 }
 
 func (p *statePatch) isEmpty() bool {
-	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.HidePhase == nil && p.ShootPhase == nil && p.Message == nil && p.SeekerID == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && p.PowerUps == nil && p.Walls == nil && p.Mines == nil && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
+	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.HidePhase == nil && p.ShootPhase == nil && p.Message == nil && p.SeekerID == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && p.PowerUps == nil && p.Walls == nil && p.Mines == nil && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil && len(p.Shots) == 0)
 }
 
 func buildStatePatch(previous, current gameState) *statePatch {
@@ -393,6 +414,14 @@ func buildStatePatch(previous, current gameState) *statePatch {
 			patch.Mines = []mine{}
 		} else {
 			patch.Mines = cloneMines(current.Mines)
+		}
+	}
+
+	if !shotsEqual(previous.Shots, current.Shots) {
+		if len(current.Shots) == 0 {
+			patch.Shots = []shotEvent{}
+		} else {
+			patch.Shots = cloneShots(current.Shots)
 		}
 	}
 
@@ -934,6 +963,7 @@ func (r *room) step() {
 			if r.shootingUnlocked {
 				r.resolveShooterCombatLocked()
 			}
+			r.updateShotsLocked()
 			if r.state.Remaining <= 0 {
 				r.endRoundLocked("Время вышло")
 				return
@@ -987,6 +1017,7 @@ func (r *room) beginRoundLocked() {
 	r.state.Walls = nil
 	r.state.Mines = nil
 	r.state.PowerUp = powerUpState{Size: powerUpSize}
+	r.state.Shots = nil
 	r.state.SeekerID = ""
 	r.state.HidePhase = ""
 	r.state.WinnerID = ""
@@ -1047,6 +1078,7 @@ func (r *room) beginRoundLocked() {
 
 func (r *room) endRoundLocked(reason string) {
 	r.state.Phase = "ended"
+	r.state.Shots = nil
 	if reason != "" {
 		r.state.Message = reason
 	} else {
@@ -1492,6 +1524,14 @@ func (r *room) resolveShooterCombatLocked() {
 		if target == nil {
 			continue
 		}
+		r.state.Shots = append(r.state.Shots, shotEvent{
+			ShooterID: shooter.ID,
+			FromX:     shooter.X,
+			FromY:     shooter.Y,
+			ToX:       target.X,
+			ToY:       target.Y,
+			Remaining: shooterShotLifetime,
+		})
 		target.Health -= shooterDamage
 		if target.Health <= 0 {
 			target.Health = 0
@@ -1502,6 +1542,21 @@ func (r *room) resolveShooterCombatLocked() {
 		}
 	}
 	r.shootRequests = make(map[string]bool)
+}
+
+func (r *room) updateShotsLocked() {
+	if len(r.state.Shots) == 0 {
+		return
+	}
+	remainingShots := make([]shotEvent, 0, len(r.state.Shots))
+	for _, shot := range r.state.Shots {
+		shot.Remaining -= tickRate.Seconds()
+		if shot.Remaining <= 0 {
+			continue
+		}
+		remainingShots = append(remainingShots, shot)
+	}
+	r.state.Shots = remainingShots
 }
 
 func (r *room) countRemainingHidersLocked() int {

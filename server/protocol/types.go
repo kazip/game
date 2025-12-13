@@ -62,6 +62,15 @@ type PlayerState struct {
 	Disguise   string  `json:"disguise,omitempty"`
 }
 
+type ShotEvent struct {
+	ShooterID string  `json:"shooterId"`
+	FromX     float64 `json:"fromX"`
+	FromY     float64 `json:"fromY"`
+	ToX       float64 `json:"toX"`
+	ToY       float64 `json:"toY"`
+	Remaining float64 `json:"remaining"`
+}
+
 type GameState struct {
 	RoomName   string         `json:"roomName"`
 	Mode       string         `json:"mode"`
@@ -80,6 +89,7 @@ type GameState struct {
 	Mines      []Mine         `json:"mines"`
 	PowerUp    PowerUpState   `json:"powerUp"`
 	PowerUps   []PowerUpState `json:"powerUps"`
+	Shots      []ShotEvent    `json:"shots"`
 	Status     *StatusEffect  `json:"statusEffect"`
 	WinnerID   string         `json:"winnerId"`
 	Golden     bool           `json:"goldenChainActive"`
@@ -123,6 +133,7 @@ type StatePatch struct {
 	Fish           *FishState     `json:"fish,omitempty"`
 	PowerUp        *PowerUpState  `json:"powerUp,omitempty"`
 	PowerUps       []PowerUpState `json:"powerUps"`
+	Shots          []ShotEvent    `json:"shots"`
 	Walls          []Wall         `json:"walls,omitempty"`
 	Mines          []Mine         `json:"mines,omitempty"`
 	Players        []PlayerPatch  `json:"players,omitempty"`

@@ -165,6 +165,7 @@ const SHARED_TIMER_NORMAL_BONUS = 2;
 const SHARED_TIMER_GOLDEN_BONUS = 1;
 const SHARED_TIMER_MINE_PENALTY = 5;
 const SHOOTER_MAX_HEALTH = 100;
+const SHOOTER_SHOT_LIFETIME = 0.35;
 
 let score = 0;
 let remaining = NORMAL_FISH_TIME_LIMIT;
@@ -3150,6 +3151,27 @@ function drawMinesCollection(targetMines) {
   ctx.restore();
 }
 
+function drawShots(traces = []) {
+  if (!traces || traces.length === 0) {
+    return;
+  }
+
+  ctx.save();
+  ctx.lineWidth = 3;
+  traces.forEach((shot) => {
+    const alpha = Math.max(0, Math.min(shot.remaining / SHOOTER_SHOT_LIFETIME, 1));
+    const gradient = ctx.createLinearGradient(shot.fromX, shot.fromY, shot.toX, shot.toY);
+    gradient.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
+    gradient.addColorStop(1, `rgba(255, 186, 73, ${alpha})`);
+    ctx.strokeStyle = gradient;
+    ctx.beginPath();
+    ctx.moveTo(shot.fromX, shot.fromY);
+    ctx.lineTo(shot.toX, shot.toY);
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
 function drawMines() {
   drawMinesCollection(mines);
 }
@@ -3324,6 +3346,9 @@ function applyMultiplayerStatePatch(previousState, patch) {
   }
   if (Array.isArray(patch.powerUps)) {
     nextState.powerUps = patch.powerUps.map((powerUp) => ({ ...powerUp }));
+  }
+  if (Array.isArray(patch.shots)) {
+    nextState.shots = patch.shots.map((shot) => ({ ...shot }));
   }
   if (Array.isArray(patch.walls)) {
     nextState.walls = patch.walls.map((wall) => ({ ...wall }));
@@ -3792,6 +3817,7 @@ class MultiplayerManager {
     const mines = this.state?.mines || this.previousRenderState?.mines || [];
     const powerUps = this.state?.powerUps || this.previousRenderState?.powerUps || [];
     const powerUp = this.state?.powerUp || this.previousRenderState?.powerUp;
+    const shots = this.state?.shots || this.previousRenderState?.shots || [];
 
     if (this.mode === "bomb-pass" && this.state) {
       drawBombPassBackground(worldSize);
@@ -3801,6 +3827,9 @@ class MultiplayerManager {
     drawMinesCollection(mines);
     powerUps.forEach((powerUpState) => drawPowerUpSprite(powerUpState));
     drawPowerUpSprite(powerUp);
+    if (this.mode === "shooters") {
+      drawShots(shots);
+    }
     drawFishSprite(fish);
     players.forEach((player) => {
       if (this.mode === "hide-and-seek" && player.disguise) {
