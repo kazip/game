@@ -74,31 +74,46 @@ class BinaryReader {
     this.offset = 0;
   }
 
+  ensureAvailable(size) {
+    const remaining = this.view.byteLength - this.offset;
+    if (remaining < size) {
+      console.warn(`Attempted to read ${size} bytes but only ${remaining} available; advancing to end of buffer.`);
+      this.offset = this.view.byteLength;
+      return false;
+    }
+    return true;
+  }
+
   readUint8() {
+    if (!this.ensureAvailable(1)) return 0;
     const value = this.view.getUint8(this.offset);
     this.offset += 1;
     return value;
   }
 
   readInt16() {
+    if (!this.ensureAvailable(2)) return 0;
     const value = this.view.getInt16(this.offset);
     this.offset += 2;
     return value;
   }
 
   readUint16() {
+    if (!this.ensureAvailable(2)) return 0;
     const value = this.view.getUint16(this.offset);
     this.offset += 2;
     return value;
   }
 
   readUint32() {
+    if (!this.ensureAvailable(4)) return 0;
     const value = this.view.getUint32(this.offset);
     this.offset += 4;
     return value;
   }
 
   readFloat32() {
+    if (!this.ensureAvailable(4)) return 0;
     const value = this.view.getFloat32(this.offset);
     this.offset += 4;
     return value;
@@ -159,8 +174,13 @@ function encodeWalls(walls = [], writer) {
 
 function decodeWalls(reader) {
   const count = reader.readUint16();
+  const available = Math.floor((reader.view.byteLength - reader.offset) / 16);
+  const safeCount = Math.max(0, Math.min(count, available));
+  if (safeCount !== count) {
+    console.warn(`Truncating wall decode: requested ${count}, only ${safeCount} fit in buffer.`);
+  }
   const walls = [];
-  for (let i = 0; i < count; i += 1) {
+  for (let i = 0; i < safeCount; i += 1) {
     walls.push({ x: reader.readFloat32(), y: reader.readFloat32(), width: reader.readFloat32(), height: reader.readFloat32() });
   }
   return walls;
@@ -177,8 +197,13 @@ function encodeMines(mines = [], writer) {
 
 function decodeMines(reader) {
   const count = reader.readUint8();
+  const available = Math.floor((reader.view.byteLength - reader.offset) / 12);
+  const safeCount = Math.max(0, Math.min(count, available));
+  if (safeCount !== count) {
+    console.warn(`Truncating mine decode: requested ${count}, only ${safeCount} fit in buffer.`);
+  }
   const mines = [];
-  for (let i = 0; i < count; i += 1) {
+  for (let i = 0; i < safeCount; i += 1) {
     mines.push({ x: reader.readFloat32(), y: reader.readFloat32(), size: reader.readFloat32() });
   }
   return mines;
@@ -198,8 +223,13 @@ function encodePowerUps(powerUps = [], writer) {
 
 function decodePowerUps(reader) {
   const count = reader.readUint8();
+  const available = Math.floor((reader.view.byteLength - reader.offset) / 18);
+  const safeCount = Math.max(0, Math.min(count, available));
+  if (safeCount !== count) {
+    console.warn(`Truncating power-up decode: requested ${count}, only ${safeCount} fit in buffer.`);
+  }
   const powerUps = [];
-  for (let i = 0; i < count; i += 1) {
+  for (let i = 0; i < safeCount; i += 1) {
     powerUps.push({
       active: reader.readBool(),
       x: reader.readFloat32(),
