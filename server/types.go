@@ -10,7 +10,7 @@ const (
 	hideSeekHideDuration  = 60.0
 	hideSeekSeekDuration  = 180.0
 	hideSeekSeekerBoost   = 1.2
-	shooterPrepDuration   = 60.0
+	shooterPrepDuration   = 30.0
 	shooterRoundDuration  = 180.0
 	shooterDamage         = 34
 	shooterMaxHealth      = 100

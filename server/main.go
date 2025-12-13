@@ -1195,25 +1195,28 @@ func (r *room) currentWorldSize() float64 {
 	if r.isHideSeekMode() {
 		return worldSize * hideSeekWorldScale
 	}
+	if r.isShooterMode() {
+		return worldSize * shooterWorldScale
+	}
 	return worldSize
 }
 
 func (r *room) wallThicknessRate() float64 {
-	if r.isBombMode() || r.isHideSeekMode() {
+	if r.isBombMode() || r.isHideSeekMode() || r.isShooterMode() {
 		return bombWallThicknessRate
 	}
 	return wallThicknessRate
 }
 
 func (r *room) maxWallTotalLen() int {
-	if r.isBombMode() || r.isHideSeekMode() {
+	if r.isBombMode() || r.isHideSeekMode() || r.isShooterMode() {
 		return bombMaxWallTotalLen
 	}
 	return maxWallTotalLen
 }
 
 func (r *room) maxSegments() int {
-	if r.isBombMode() || r.isHideSeekMode() {
+	if r.isBombMode() || r.isHideSeekMode() || r.isShooterMode() {
 		return bombMaxSegments
 	}
 	return maxSegments
