@@ -16,7 +16,11 @@ const POWER_UP_TYPE_CODES = {
   goose: 9,
   goldfish: 10,
   mine: 11,
-  alarm: 12
+  alarm: 12,
+  blaster: 13,
+  laser: 14,
+  pistol: 15,
+  plasma: 16
 };
 const MESSAGE_TYPES = { full: 0, patch: 1 };
 
@@ -263,6 +267,7 @@ function encodePlayers(players = [], writer) {
     writer.writeString(player.id || "");
     writer.writeString(player.name || "");
     writer.writeUint32(player.score >>> 0);
+    writer.writeUint16(player.health >>> 0);
     writer.writeBool(Boolean(player.ready));
     writer.writeBool(Boolean(player.alive));
     writer.writeFloat32(player.x || 0);
@@ -272,6 +277,7 @@ function encodePlayers(players = [], writer) {
     writer.writeBool(Boolean(player.moving));
     writer.writeFloat32(player.walkCycle || 0);
     writer.writeFloat32(player.stepAccumulator || 0);
+    writer.writeString(player.weapon || "");
     const appearance = player.appearance ? JSON.stringify(player.appearance).slice(0, 300) : "";
     writer.writeString(appearance || "");
     writer.writeString(player.disguise || "");
@@ -286,6 +292,7 @@ function decodePlayers(reader) {
       id: reader.readString(),
       name: reader.readString(),
       score: reader.readUint32(),
+      health: reader.readUint16(),
       ready: reader.readBool(),
       alive: reader.readBool(),
       x: reader.readFloat32(),
@@ -295,6 +302,7 @@ function decodePlayers(reader) {
       moving: reader.readBool(),
       walkCycle: reader.readFloat32(),
       stepAccumulator: reader.readFloat32(),
+      weapon: reader.readString(),
       appearance: {}
     };
     const appearanceString = reader.readString();
@@ -401,6 +409,8 @@ function decodePlayerPatch(reader) {
     }
   }
   if (flags2 & (1 << 4)) patch.disguise = reader.readString();
+  if (flags2 & (1 << 5)) patch.health = reader.readUint16();
+  if (flags2 & (1 << 6)) patch.weapon = reader.readString();
   return patch;
 }
 
@@ -413,6 +423,7 @@ function decodeFullState(reader) {
   const countdown = reader.readFloat32();
   const remaining = reader.readFloat32();
   const hidePhase = reader.readString();
+  const shootPhase = reader.readString();
   const goldenChainActive = reader.readBool();
   const winnerId = reader.readString();
   const message = reader.readString();
@@ -458,6 +469,7 @@ function decodeFullState(reader) {
       countdown,
       remaining,
       hidePhase,
+      shootPhase,
       message,
       seekerId,
       bombHolder,
@@ -534,6 +546,9 @@ function decodePatch(reader) {
   if (flags3 & (1 << 2)) {
     patch.hidePhase = reader.readString();
   }
+  if (flags3 & (1 << 3)) {
+    patch.shootPhase = reader.readString();
+  }
   if (flags2 & (1 << 1)) {
     patch.walls = decodeWalls(reader);
   }
@@ -578,19 +593,21 @@ export function decodeStateFromBase64(payload) {
   return decodeFullState(reader);
 }
 
-export function encodeInputToBase64(playerId, vector) {
+export function encodeInputToBase64(playerId, vector, shoot = false) {
   const writer = new BinaryWriter();
   writer.writeString(playerId || "");
   writer.writeFloat32(vector?.x || 0);
   writer.writeFloat32(vector?.y || 0);
+  writer.writeBool(Boolean(shoot));
   return toBase64(writer.toUint8Array());
 }
 
-export function encodeInputToBuffer(playerId, vector) {
+export function encodeInputToBuffer(playerId, vector, shoot = false) {
   const writer = new BinaryWriter();
   writer.writeString(playerId || "");
   writer.writeFloat32(vector?.x || 0);
   writer.writeFloat32(vector?.y || 0);
+  writer.writeBool(Boolean(shoot));
   return writer.toUint8Array();
 }
 
@@ -599,5 +616,9 @@ export function decodeInputFromBase64(payload) {
   if (!reader) {
     return null;
   }
-  return { playerId: reader.readString(), vector: { x: reader.readFloat32(), y: reader.readFloat32() } };
+  return {
+    playerId: reader.readString(),
+    vector: { x: reader.readFloat32(), y: reader.readFloat32() },
+    shoot: reader.readBool()
+  };
 }

@@ -9,6 +9,10 @@ const (
 	hideSeekHideDuration  = 60.0
 	hideSeekSeekDuration  = 180.0
 	hideSeekSeekerBoost   = 1.2
+	shooterPrepDuration   = 60.0
+	shooterRoundDuration  = 180.0
+	shooterDamage         = 34
+	shooterMaxHealth      = 100
 	catSpeed              = 180.0
 	catSize               = 36.0
 	fishSize              = 28.0
@@ -80,6 +84,8 @@ type playerState struct {
 	WalkCycle  float64       `json:"walkCycle"`
 	StepAccum  float64       `json:"stepAccumulator"`
 	Score      int           `json:"score"`
+	Health     int           `json:"health"`
+	Weapon     string        `json:"weapon,omitempty"`
 	Appearance catAppearance `json:"appearance"`
 	Disguise   string        `json:"disguise,omitempty"`
 }
@@ -101,6 +107,7 @@ type gameState struct {
 	Countdown  float64        `json:"countdown"`
 	Remaining  float64        `json:"remaining"`
 	HidePhase  string         `json:"hidePhase,omitempty"`
+	ShootPhase string         `json:"shootPhase,omitempty"`
 	Message    string         `json:"message"`
 	SeekerID   string         `json:"seekerId"`
 	BombHolder string         `json:"bombHolder"`
@@ -162,6 +169,7 @@ type wsMessage struct {
 	Type       string        `json:"type"`
 	Ready      *bool         `json:"ready,omitempty"`
 	Vector     *vector       `json:"vector,omitempty"`
+	Shoot      *bool         `json:"shoot,omitempty"`
 	Message    *chatMessage  `json:"message,omitempty"`
 	Appearance catAppearance `json:"appearance,omitempty"`
 	State      *gameState    `json:"state,omitempty"`
@@ -184,6 +192,8 @@ type playerPatch struct {
 	WalkCycle  *float64      `json:"walkCycle,omitempty"`
 	StepAccum  *float64      `json:"stepAccumulator,omitempty"`
 	Score      *int          `json:"score,omitempty"`
+	Health     *int          `json:"health,omitempty"`
+	Weapon     *string       `json:"weapon,omitempty"`
 	Appearance catAppearance `json:"appearance,omitempty"`
 	Disguise   *string       `json:"disguise,omitempty"`
 }
@@ -194,6 +204,7 @@ type statePatch struct {
 	Countdown      *float64       `json:"countdown,omitempty"`
 	Remaining      *float64       `json:"remaining,omitempty"`
 	HidePhase      *string        `json:"hidePhase,omitempty"`
+	ShootPhase     *string        `json:"shootPhase,omitempty"`
 	Message        *string        `json:"message,omitempty"`
 	SeekerID       *string        `json:"seekerId,omitempty"`
 	BombHolder     *string        `json:"bombHolder,omitempty"`

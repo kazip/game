@@ -56,6 +56,8 @@ type PlayerState struct {
 	WalkCycle  float64 `json:"walkCycle"`
 	StepAccum  float64 `json:"stepAccumulator"`
 	Score      int     `json:"score"`
+	Health     int     `json:"health"`
+	Weapon     string  `json:"weapon"`
 	Appearance string  `json:"appearance"`
 	Disguise   string  `json:"disguise,omitempty"`
 }
@@ -67,6 +69,7 @@ type GameState struct {
 	Countdown  float64        `json:"countdown"`
 	Remaining  float64        `json:"remaining"`
 	HidePhase  string         `json:"hidePhase"`
+	ShootPhase string         `json:"shootPhase"`
 	Message    string         `json:"message"`
 	SeekerID   string         `json:"seekerId"`
 	BombHolder string         `json:"bombHolder"`
@@ -97,6 +100,8 @@ type PlayerPatch struct {
 	WalkCycle  *float64 `json:"walkCycle,omitempty"`
 	StepAccum  *float64 `json:"stepAccumulator,omitempty"`
 	Score      *int     `json:"score,omitempty"`
+	Health     *int     `json:"health,omitempty"`
+	Weapon     *string  `json:"weapon,omitempty"`
 	Appearance *string  `json:"appearance,omitempty"`
 	Disguise   *string  `json:"disguise,omitempty"`
 }
@@ -107,6 +112,7 @@ type StatePatch struct {
 	Countdown      *float64       `json:"countdown,omitempty"`
 	Remaining      *float64       `json:"remaining,omitempty"`
 	HidePhase      *string        `json:"hidePhase,omitempty"`
+	ShootPhase     *string        `json:"shootPhase,omitempty"`
 	Message        *string        `json:"message,omitempty"`
 	SeekerID       *string        `json:"seekerId,omitempty"`
 	BombHolder     *string        `json:"bombHolder,omitempty"`

@@ -148,6 +148,9 @@ function getModeLabel(mode) {
   if (mode === "hide-and-seek") {
     return "Прятки";
   }
+  if (mode === "shooters") {
+    return "Стрелялки";
+  }
   return "Охота за рыбкой";
 }
 
@@ -161,6 +164,7 @@ const SHARED_TIMER_START = 20;
 const SHARED_TIMER_NORMAL_BONUS = 2;
 const SHARED_TIMER_GOLDEN_BONUS = 1;
 const SHARED_TIMER_MINE_PENALTY = 5;
+const SHOOTER_MAX_HEALTH = 100;
 
 let score = 0;
 let remaining = NORMAL_FISH_TIME_LIMIT;
@@ -3286,6 +3290,9 @@ function applyMultiplayerStatePatch(previousState, patch) {
   if (patch.hidePhase !== undefined) {
     nextState.hidePhase = patch.hidePhase;
   }
+  if (patch.shootPhase !== undefined) {
+    nextState.shootPhase = patch.shootPhase;
+  }
   if (patch.goldenChainActive !== undefined) {
     nextState.goldenChainActive = patch.goldenChainActive;
   }
@@ -3357,6 +3364,8 @@ function normalizeMultiplayerPlayer(player) {
   normalized.appearance = sanitizeAppearance(normalized.appearance);
   normalized.name = normalized.name || "Игрок";
   normalized.disguise = typeof normalized.disguise === "string" ? normalized.disguise : "";
+  normalized.health = Math.max(0, Number(normalized.health)) || SHOOTER_MAX_HEALTH;
+  normalized.weapon = typeof normalized.weapon === "string" ? normalized.weapon : "";
   return normalized;
 }
 
@@ -3373,6 +3382,7 @@ class MultiplayerManager {
     this.smoothingDuration = 1000 / 15;
     this.ready = false;
     this.inputVector = { x: 0, y: 0 };
+    this.shootIntent = false;
     this.lastInputSentAt = 0;
     this.rendering = false;
     this.renderFrameBound = (timestamp) => this.renderFrame(timestamp);
@@ -4012,12 +4022,12 @@ class MultiplayerManager {
     this.sendMessage({ type: "chat", message: payload });
   }
 
-  sendInput(vector) {
+  sendInput(vector, shoot = false) {
     if (this.useBinaryProtocol) {
-      this.sendBinary(encodeInputToBuffer(this.playerId, vector));
+      this.sendBinary(encodeInputToBuffer(this.playerId, vector, shoot));
       return;
     }
-    this.sendMessage({ type: "input", vector });
+    this.sendMessage({ type: "input", vector, shoot });
   }
 
   updateInputFromControls() {
@@ -4027,18 +4037,26 @@ class MultiplayerManager {
       Math.abs(vector.x - this.inputVector.x) > 0.02 ||
       Math.abs(vector.y - this.inputVector.y) > 0.02;
     const now = performance.now();
-    if (changed || now - this.lastInputSentAt > 120) {
+    if (changed || now - this.lastInputSentAt > 120 || this.shootIntent) {
       this.inputVector = vector;
       this.lastInputSentAt = now;
-      this.sendInput(vector);
+      this.sendInput(vector, this.shootIntent);
+      this.shootIntent = false;
     }
+  }
+
+  requestShoot() {
+    this.shootIntent = true;
+    this.updateInputFromControls();
   }
 
   updateLobbyUI() {
     if (!multiplayerLobbyCard || multiplayerLobbyCard.classList.contains("hidden")) {
       return;
     }
-    const isBombMode = this.mode === "bomb-pass" || this.state?.mode === "bomb-pass";
+    const currentMode = this.state?.mode || this.mode;
+    const isBombMode = currentMode === "bomb-pass";
+    const isShooterMode = currentMode === "shooters";
     if (multiplayerRoomLabel) {
       multiplayerRoomLabel.textContent = this.roomName;
     }
@@ -4055,15 +4073,22 @@ class MultiplayerManager {
     if (multiplayerStatusEl) {
       let message = this.state?.message || "Подождите немного, идёт подключение";
       if (this.state?.phase === "ended" && players.length > 0) {
-        const sorted = [...players].sort((a, b) => (isBombMode ? Number(b.alive) - Number(a.alive) : b.score - a.score));
+        const sorted = [...players].sort((a, b) => {
+          if ((isBombMode || isShooterMode) && a.alive !== b.alive) {
+            return a.alive ? -1 : 1;
+          }
+          return b.score - a.score;
+        });
         const winner = this.state.winnerId
           ? sorted.find((player) => player.id === this.state.winnerId)
           : sorted[0];
         const winnerText = winner
           ? `Победитель: ${winner.name}${isBombMode ? "" : ` (${winner.score})`}`
           : "Победитель не определён";
-        const scoresText = isBombMode
-          ? sorted.map((player) => `${player.name}: ${player.alive ? "выжил" : "выбыл"}`).join(", ")
+        const scoresText = (isBombMode || isShooterMode)
+          ? sorted
+              .map((player) => `${player.name}: ${player.alive ? "в игре" : "выбыл"}${isShooterMode ? ` · ${player.score}` : ""}`)
+              .join(", ")
           : sorted.map((player) => `${player.name}: ${player.score}`).join(", ");
         message = `${message}. ${winnerText}. Итоги — ${scoresText}`;
       }
@@ -4083,16 +4108,20 @@ class MultiplayerManager {
       multiplayerHudRoom.textContent = this.roomName;
     }
     if (multiplayerHudMode) {
-      multiplayerHudMode.textContent = getModeLabel(this.mode);
+      multiplayerHudMode.textContent = getModeLabel(this.state?.mode || this.mode);
     }
     const phase = this.state.phase;
     const isBombMode = this.mode === "bomb-pass";
+    const isShooterMode = this.mode === "shooters";
     const shouldShowHud = phase === "countdown" || phase === "playing" || phase === "ended";
     multiplayerHud.classList.toggle("hidden", !shouldShowHud);
     if (shouldShowHud && multiplayerHudPlayers) {
       multiplayerHudPlayers.innerHTML = "";
       const sorted = [...(this.state.players || [])].sort((a, b) => {
         if (isBombMode && a.alive !== b.alive) {
+          return a.alive ? -1 : 1;
+        }
+        if (isShooterMode && a.alive !== b.alive) {
           return a.alive ? -1 : 1;
         }
         return (b.score || 0) - (a.score || 0);
@@ -4111,7 +4140,14 @@ class MultiplayerManager {
         if (isBombMode && phase === "playing" && bombHolderId === player.id) {
           status = `${status} · 💣`;
         }
-        const rightText = isBombMode ? status : `${player.score} · ${status}`;
+        let rightText = `${player.score} · ${status}`;
+        if (isBombMode) {
+          rightText = status;
+        } else if (isShooterMode) {
+          const healthText = `${Math.max(0, player.health ?? SHOOTER_MAX_HEALTH)}❤`;
+          const weaponText = player.weapon ? player.weapon : "без оружия";
+          rightText = `${healthText} · ${weaponText} · ${status}`;
+        }
         item.innerHTML = `<span>${escapeHtml(player.name)}</span><span>${rightText}</span>`;
         multiplayerHudPlayers.appendChild(item);
       });
@@ -4122,6 +4158,8 @@ class MultiplayerManager {
       } else if (phase === "playing") {
         if (isBombMode) {
           multiplayerCountdownEl.textContent = `Бомба: ${(this.state.bombTimer || 0).toFixed(1)} c`;
+        } else if (isShooterMode && this.state.shootPhase === "loot") {
+          multiplayerCountdownEl.textContent = `Подготовка: ${(this.state.countdown || 0).toFixed(1)} c`;
         } else {
           multiplayerCountdownEl.textContent = `Время: ${(this.state.remaining || 0).toFixed(1)} c`;
         }
@@ -4145,6 +4183,8 @@ class MultiplayerManager {
       let timerValue = phase === "countdown" ? this.state.countdown : this.state.remaining;
       if (this.mode === "bomb-pass" && phase === "playing") {
         timerValue = this.state.bombTimer;
+      } else if (this.mode === "shooters" && phase === "playing" && this.state.shootPhase === "loot") {
+        timerValue = this.state.countdown ?? timerValue;
       }
       timerEl.textContent = timerValue != null ? Math.max(timerValue, 0).toFixed(1) : "0.0";
     }
@@ -4180,6 +4220,9 @@ window.addEventListener("keydown", (event) => {
   }
   ensureAudioActive();
   keys.add(key);
+  if (gameMode === "multiplayer" && multiplayerManager && key === " ") {
+    multiplayerManager.requestShoot();
+  }
   if (gameMode === "multiplayer" && multiplayerManager) {
     multiplayerManager.updateInputFromControls();
   }
@@ -4195,6 +4238,14 @@ window.addEventListener("keyup", (event) => {
     multiplayerManager.updateInputFromControls();
   }
 });
+
+if (canvas) {
+  canvas.addEventListener("click", () => {
+    if (gameMode === "multiplayer" && multiplayerManager) {
+      multiplayerManager.requestShoot();
+    }
+  });
+}
 
 if (openMenuBtn) {
   openMenuBtn.addEventListener("click", () => {
