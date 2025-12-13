@@ -14,6 +14,7 @@ const (
 	shooterRoundDuration  = 180.0
 	shooterDamage         = 34
 	shooterMaxHealth      = 100
+	shooterShotLifetime   = 0.35
 	catSpeed              = 180.0
 	catSize               = 36.0
 	fishSize              = 28.0
@@ -119,6 +120,7 @@ type gameState struct {
 	Mines      []mine         `json:"mines"`
 	PowerUp    powerUpState   `json:"powerUp"`
 	PowerUps   []powerUpState `json:"powerUps,omitempty"`
+	Shots      []shotEvent    `json:"shots,omitempty"`
 	Status     *statusEffect  `json:"statusEffect"`
 	WinnerID   string         `json:"winnerId"`
 	Golden     bool           `json:"goldenChainActive"`
@@ -146,6 +148,15 @@ type powerUpState struct {
 	Active    bool    `json:"active"`
 	Remaining float64 `json:"remaining"`
 	Type      string  `json:"type"`
+}
+
+type shotEvent struct {
+	ShooterID string  `json:"shooterId"`
+	FromX     float64 `json:"fromX"`
+	FromY     float64 `json:"fromY"`
+	ToX       float64 `json:"toX"`
+	ToY       float64 `json:"toY"`
+	Remaining float64 `json:"remaining"`
 }
 
 type statusEffect struct {
@@ -212,6 +223,7 @@ type statePatch struct {
 	BombTimer      *float64       `json:"bombTimer,omitempty"`
 	WinnerID       *string        `json:"winnerId,omitempty"`
 	Golden         *bool          `json:"goldenChainActive,omitempty"`
+	Shots          []shotEvent    `json:"shots,omitempty"`
 	Status         *statusEffect  `json:"statusEffect,omitempty"`
 	Fish           *fishState     `json:"fish,omitempty"`
 	PowerUp        *powerUpState  `json:"powerUp,omitempty"`

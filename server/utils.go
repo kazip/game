@@ -100,6 +100,24 @@ func minesEqual(a, b []mine) bool {
 	return true
 }
 
+func shotsEqual(a, b []shotEvent) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ShooterID != b[i].ShooterID {
+			return false
+		}
+		if floatChanged(a[i].FromX, b[i].FromX) || floatChanged(a[i].FromY, b[i].FromY) || floatChanged(a[i].ToX, b[i].ToX) || floatChanged(a[i].ToY, b[i].ToY) {
+			return false
+		}
+		if floatChanged(a[i].Remaining, b[i].Remaining) {
+			return false
+		}
+	}
+	return true
+}
+
 func appearanceEqual(a, b *playerState) bool {
 	if a == nil && b == nil {
 		return true
@@ -133,6 +151,15 @@ func clonePowerUps(src []powerUpState) []powerUpState {
 		return nil
 	}
 	dst := make([]powerUpState, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func cloneShots(src []shotEvent) []shotEvent {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]shotEvent, len(src))
 	copy(dst, src)
 	return dst
 }
