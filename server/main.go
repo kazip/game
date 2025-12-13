@@ -86,6 +86,8 @@ func toProtocolPlayerState(p *playerState) protocol.PlayerState {
 		WalkCycle:  p.WalkCycle,
 		StepAccum:  p.StepAccum,
 		Score:      p.Score,
+		Health:     p.Health,
+		Weapon:     p.Weapon,
 		Appearance: appearance,
 		Disguise:   p.Disguise,
 	}
@@ -120,6 +122,7 @@ func toProtocolGameState(state gameState) protocol.GameState {
 		Countdown:  state.Countdown,
 		Remaining:  state.Remaining,
 		HidePhase:  state.HidePhase,
+		ShootPhase: state.ShootPhase,
 		Message:    state.Message,
 		SeekerID:   state.SeekerID,
 		BombHolder: state.BombHolder,
@@ -158,6 +161,8 @@ func toProtocolPlayerPatch(p playerPatch) protocol.PlayerPatch {
 		}
 		protoPatch.Appearance = &appearance
 	}
+	protoPatch.Health = p.Health
+	protoPatch.Weapon = p.Weapon
 	if p.Disguise != nil {
 		disguise := *p.Disguise
 		protoPatch.Disguise = &disguise
@@ -180,6 +185,7 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 	protoPatch.BombTimer = patch.BombTimer
 	protoPatch.WinnerID = patch.WinnerID
 	protoPatch.Golden = patch.Golden
+	protoPatch.ShootPhase = patch.ShootPhase
 	if patch.Status != nil {
 		protoPatch.Status = &protocol.StatusEffect{
 			Type:      patch.Status.Type,
@@ -189,6 +195,9 @@ func toProtocolStatePatch(patch *statePatch) *protocol.StatePatch {
 	}
 	if patch.HidePhase != nil {
 		protoPatch.HidePhase = stringPtr(*patch.HidePhase)
+	}
+	if patch.ShootPhase != nil {
+		protoPatch.ShootPhase = stringPtr(*patch.ShootPhase)
 	}
 	if patch.Fish != nil {
 		fish := protocol.FishState(*patch.Fish)
@@ -247,7 +256,7 @@ func (r *room) snapshotLocked() gameState {
 }
 
 func (p playerPatch) isEmpty() bool {
-	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && len(p.Appearance) == 0 && p.Disguise == nil
+	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && p.Health == nil && p.Weapon == nil && len(p.Appearance) == 0 && p.Disguise == nil
 }
 
 func buildPlayerPatch(previous, current *playerState) *playerPatch {
@@ -288,6 +297,12 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 	if previous == nil || previous.Score != current.Score {
 		patch.Score = intPtr(current.Score)
 	}
+	if previous == nil || previous.Health != current.Health {
+		patch.Health = intPtr(current.Health)
+	}
+	if previous == nil || previous.Weapon != current.Weapon {
+		patch.Weapon = stringPtr(current.Weapon)
+	}
 	if !appearanceEqual(previous, current) {
 		patch.Appearance = current.Appearance
 	}
@@ -302,7 +317,7 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 }
 
 func (p *statePatch) isEmpty() bool {
-	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.HidePhase == nil && p.Message == nil && p.SeekerID == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && p.PowerUps == nil && p.Walls == nil && p.Mines == nil && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
+	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.HidePhase == nil && p.ShootPhase == nil && p.Message == nil && p.SeekerID == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && p.PowerUps == nil && p.Walls == nil && p.Mines == nil && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil)
 }
 
 func buildStatePatch(previous, current gameState) *statePatch {
@@ -322,6 +337,9 @@ func buildStatePatch(previous, current gameState) *statePatch {
 	}
 	if previous.HidePhase != current.HidePhase {
 		patch.HidePhase = stringPtr(current.HidePhase)
+	}
+	if previous.ShootPhase != current.ShootPhase {
+		patch.ShootPhase = stringPtr(current.ShootPhase)
 	}
 	if previous.Message != current.Message {
 		patch.Message = stringPtr(current.Message)
@@ -423,6 +441,8 @@ type room struct {
 	lastBombPassTo     string
 	lastBombPassAt     time.Time
 	bombPowerUpTimer   float64
+	shootRequests      map[string]bool
+	shootingUnlocked   bool
 }
 
 type server struct {
@@ -461,6 +481,8 @@ func normalizeMode(mode string) string {
 		return mode
 	case "hide-and-seek":
 		return mode
+	case "shooters":
+		return mode
 	default:
 		return "classic"
 	}
@@ -489,6 +511,7 @@ func (s *server) getOrCreateRoom(name, mode string) *room {
 		server:           s,
 		bombSlowTimers:   make(map[string]float64),
 		bombPowerUpTimer: bombPowerUpInterval,
+		shootRequests:    make(map[string]bool),
 	}
 	r.state = gameState{
 		RoomName:   name,
@@ -499,6 +522,7 @@ func (s *server) getOrCreateRoom(name, mode string) *room {
 		PowerUps:   nil,
 		Remaining:  roundDuration.Seconds(),
 		HidePhase:  "",
+		ShootPhase: "",
 		Message:    "Ожидаем игроков",
 		ServerTime: time.Now().UnixMilli(),
 	}
@@ -721,9 +745,12 @@ func (r *room) handleConnection(conn *websocket.Conn, playerID, playerName strin
 				if !r.server.binaryProtocolEnabled() {
 					continue
 				}
-				if pid, vec := decodeInputBuffer(data); pid != nil && vec != nil {
+				if pid, vec, shoot := decodeInputBuffer(data); pid != nil && vec != nil {
 					r.mu.Lock()
 					r.inputs[*pid] = *vec
+					if shoot != nil && *shoot {
+						r.shootRequests[*pid] = true
+					}
 					r.mu.Unlock()
 				}
 				continue
@@ -747,6 +774,9 @@ func (r *room) handleClientMessage(playerID string, msg wsMessage) {
 		if msg.Vector != nil {
 			r.mu.Lock()
 			r.inputs[playerID] = *msg.Vector
+			if msg.Shoot != nil && *msg.Shoot {
+				r.shootRequests[playerID] = true
+			}
 			r.mu.Unlock()
 		}
 	case "chat":
@@ -836,6 +866,9 @@ func (r *room) ensurePlayer(id, name string) *playerState {
 	if name != "" {
 		player.Name = name
 	}
+	if player.Health == 0 {
+		player.Health = shooterMaxHealth
+	}
 	return player
 }
 
@@ -892,6 +925,21 @@ func (r *room) step() {
 			r.updatePlayersLocked()
 			r.updateBombPowerUpLocked()
 			r.updateBombPassLocked()
+		} else if r.isShooterMode() {
+			r.state.Remaining -= tickRate.Seconds()
+			r.updatePlayersLocked()
+			r.tickShooterPhaseLocked()
+			if r.shootingUnlocked {
+				r.resolveShooterCombatLocked()
+			}
+			if r.state.Remaining <= 0 {
+				r.endRoundLocked("Время вышло")
+				return
+			}
+			if r.countAlivePlayersLocked() <= 1 {
+				r.endRoundLocked("Выжил только один котик!")
+				return
+			}
 		} else if r.isHideSeekMode() {
 			r.state.Remaining -= tickRate.Seconds()
 			r.updatePlayersLocked()
@@ -940,7 +988,9 @@ func (r *room) beginRoundLocked() {
 	r.state.SeekerID = ""
 	r.state.HidePhase = ""
 	r.state.WinnerID = ""
+	r.state.ShootPhase = ""
 	r.bombSlowTimers = make(map[string]float64)
+	r.shootRequests = make(map[string]bool)
 	r.resetBombPassHistoryLocked()
 	if r.isBombMode() {
 		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
@@ -950,6 +1000,17 @@ func (r *room) beginRoundLocked() {
 		r.buildArenaWithWallsLocked()
 		r.bombPowerUpTimer = 0
 		r.updateBombPowerUpLocked()
+	} else if r.isShooterMode() {
+		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
+		r.state.PowerUp.Active = false
+		r.state.PowerUps = r.spawnShooterLootLocked()
+		r.state.Mines = nil
+		r.state.Remaining = shooterRoundDuration
+		r.state.Countdown = shooterPrepDuration
+		r.state.ShootPhase = "loot"
+		r.shootingUnlocked = false
+		r.state.Message = "Подготовка: найдите оружие!"
+		r.buildArenaWithWallsLocked()
 	} else if r.isHideSeekMode() {
 		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
 		r.state.PowerUp.Active = false
@@ -972,6 +1033,8 @@ func (r *room) beginRoundLocked() {
 		p.Score = 0
 		p.Disguise = ""
 		p.Size = catSize
+		p.Health = shooterMaxHealth
+		p.Weapon = ""
 	}
 	r.state.BombHolder = ""
 	r.state.BombTimer = bombTimerDuration
@@ -989,6 +1052,8 @@ func (r *room) endRoundLocked(reason string) {
 	}
 	r.state.Fish.Alive = false
 	r.state.Countdown = 0
+	r.state.ShootPhase = ""
+	r.shootingUnlocked = false
 	r.state.WinnerID = r.bestPlayerIDLocked()
 }
 
@@ -1016,6 +1081,12 @@ func (r *room) bestPlayerIDLocked() string {
 			}
 		}
 		return ""
+	}
+	if r.isShooterMode() {
+		alive := r.alivePlayersLocked()
+		if len(alive) == 1 {
+			return alive[0].ID
+		}
 	}
 	for _, p := range r.players {
 		if best == nil || p.Score > best.Score {
@@ -1059,6 +1130,8 @@ func (r *room) updatePlayersLocked() {
 			r.collectBombPowerUpsLocked(p)
 		} else if r.isHideSeekMode() {
 			r.handleHideSeekDisguiseLocked(p)
+		} else if r.isShooterMode() {
+			r.collectShooterLootLocked(p)
 		} else if r.state.PowerUp.Active {
 			dist := math.Hypot(p.X-r.state.PowerUp.X, p.Y-r.state.PowerUp.Y)
 			if dist < (p.Size+r.state.PowerUp.Size)/2 {
@@ -1107,6 +1180,10 @@ func (r *room) isBombMode() bool {
 
 func (r *room) isHideSeekMode() bool {
 	return r.state.Mode == "hide-and-seek"
+}
+
+func (r *room) isShooterMode() bool {
+	return r.state.Mode == "shooters"
 }
 
 func (r *room) currentWorldSize() float64 {
@@ -1314,6 +1391,112 @@ func (r *room) handleHideSeekDisguiseLocked(p *playerState) {
 			return
 		}
 	}
+}
+
+func (r *room) spawnShooterLootLocked() []powerUpState {
+	totalPlayers := len(r.players)
+	if totalPlayers == 0 {
+		return nil
+	}
+	world := r.currentWorldSize()
+	count := clampInt(totalPlayers*2, 3, 12)
+	margin := 20.0
+	weapons := []string{"blaster", "laser", "pistol", "plasma"}
+	loot := make([]powerUpState, 0, count)
+	for i := 0; i < count; i++ {
+		x := rand.Float64()*(world-2*margin) + margin
+		y := rand.Float64()*(world-2*margin) + margin
+		loot = append(loot, powerUpState{X: x, Y: y, Size: powerUpSize, Active: true, Remaining: shooterPrepDuration, Type: weapons[rand.Intn(len(weapons))]})
+	}
+	return loot
+}
+
+func (r *room) collectShooterLootLocked(p *playerState) {
+	if !r.isShooterMode() || p == nil || !p.Alive {
+		return
+	}
+	for i := range r.state.PowerUps {
+		item := &r.state.PowerUps[i]
+		if !item.Active {
+			continue
+		}
+		dist := math.Hypot(p.X-item.X, p.Y-item.Y)
+		if dist <= (p.Size+item.Size)/2 {
+			p.Weapon = item.Type
+			item.Active = false
+			item.Remaining = 0
+			r.state.Message = fmt.Sprintf("%s нашёл оружие: %s", fallbackName(p.Name), item.Type)
+			return
+		}
+	}
+}
+
+func (r *room) tickShooterPhaseLocked() {
+	if !r.isShooterMode() || r.shootingUnlocked {
+		return
+	}
+	r.state.Countdown -= tickRate.Seconds()
+	if r.state.Countdown <= 0 {
+		r.state.Countdown = 0
+		r.shootingUnlocked = true
+		r.state.ShootPhase = "fight"
+		r.state.Message = "Стрельба разрешена!"
+	}
+}
+
+func (r *room) findShooterTargetLocked(shooter *playerState) *playerState {
+	var best *playerState
+	bestDist := 0.0
+	for _, p := range r.players {
+		if p == nil || !p.Alive || p.ID == shooter.ID {
+			continue
+		}
+		dx := p.X - shooter.X
+		if shooter.Facing >= 0 && dx < 0 {
+			continue
+		}
+		if shooter.Facing < 0 && dx > 0 {
+			continue
+		}
+		dist := math.Hypot(dx, p.Y-shooter.Y)
+		if dist > 220 {
+			continue
+		}
+		if best == nil || dist < bestDist {
+			best = p
+			bestDist = dist
+		}
+	}
+	return best
+}
+
+func (r *room) resolveShooterCombatLocked() {
+	if !r.isShooterMode() || len(r.shootRequests) == 0 {
+		r.shootRequests = make(map[string]bool)
+		return
+	}
+	for shooterID, requested := range r.shootRequests {
+		if !requested {
+			continue
+		}
+		shooter := r.players[shooterID]
+		if shooter == nil || !shooter.Alive || shooter.Weapon == "" {
+			continue
+		}
+		target := r.findShooterTargetLocked(shooter)
+		if target == nil {
+			continue
+		}
+		target.Health -= shooterDamage
+		if target.Health <= 0 {
+			target.Health = 0
+			target.Alive = false
+			target.Moving = false
+			shooter.Score++
+			r.state.Message = fmt.Sprintf("%s выбил %s", fallbackName(shooter.Name), fallbackName(target.Name))
+		}
+	}
+	r.shootRequests = make(map[string]bool)
 }
 
 func (r *room) countRemainingHidersLocked() int {

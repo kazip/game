@@ -24,6 +24,10 @@ var (
 		"goldfish": 10,
 		"mine":     11,
 		"alarm":    12,
+		"blaster":  13,
+		"laser":    14,
+		"pistol":   15,
+		"plasma":   16,
 	}
 
 	messageTypeFull  uint8 = 0
@@ -132,17 +136,21 @@ func (r *binaryReader) readFloatVector() (*Vector, error) {
 	return &Vector{X: float64(x), Y: float64(y)}, nil
 }
 
-func DecodeInputBuffer(data []byte) (*string, *Vector) {
+func DecodeInputBuffer(data []byte) (*string, *Vector, *bool) {
 	reader := &binaryReader{data: data}
 	playerID, err := reader.readString()
 	if err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	vec, err := reader.readFloatVector()
 	if err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return &playerID, vec
+	shoot, err := reader.readBool()
+	if err != nil {
+		return nil, nil, nil
+	}
+	return &playerID, vec, &shoot
 }
 
 func encodeWallsBinary(walls []Wall, writer *binaryWriter) {
@@ -199,6 +207,7 @@ func encodePlayersBinary(players []PlayerState, writer *binaryWriter) {
 		writer.writeString(p.ID)
 		writer.writeString(p.Name)
 		writer.writeUint32(uint32(p.Score))
+		writer.writeUint16(uint16(p.Health))
 		writer.writeBool(p.Ready)
 		writer.writeBool(p.Alive)
 		writer.writeFloat32(float32(p.X))
@@ -208,6 +217,7 @@ func encodePlayersBinary(players []PlayerState, writer *binaryWriter) {
 		writer.writeBool(p.Moving)
 		writer.writeFloat32(float32(p.WalkCycle))
 		writer.writeFloat32(float32(p.StepAccum))
+		writer.writeString(p.Weapon)
 
 		appearance := p.Appearance
 		if len(appearance) > 300 {
@@ -229,6 +239,7 @@ func EncodeState(state GameState) []byte {
 	writer.writeFloat32(float32(state.Countdown))
 	writer.writeFloat32(float32(state.Remaining))
 	writer.writeString(state.HidePhase)
+	writer.writeString(state.ShootPhase)
 	writer.writeBool(state.Golden)
 	writer.writeString(state.WinnerID)
 	writer.writeString(state.Message)
@@ -314,6 +325,12 @@ func encodePlayerPatchBinary(p PlayerPatch, writer *binaryWriter) {
 	if p.Disguise != nil {
 		flags2 |= 1 << 4
 	}
+	if p.Health != nil {
+		flags2 |= 1 << 5
+	}
+	if p.Weapon != nil {
+		flags2 |= 1 << 6
+	}
 
 	writer.writeUint8(flags1)
 	writer.writeUint8(flags2)
@@ -360,6 +377,12 @@ func encodePlayerPatchBinary(p PlayerPatch, writer *binaryWriter) {
 	}
 	if p.Disguise != nil {
 		writer.writeString(*p.Disguise)
+	}
+	if p.Health != nil {
+		writer.writeUint16(uint16(*p.Health))
+	}
+	if p.Weapon != nil {
+		writer.writeString(*p.Weapon)
 	}
 }
 
@@ -432,6 +455,9 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 	if patch.HidePhase != nil {
 		flags3 |= 1 << 2
 	}
+	if patch.ShootPhase != nil {
+		flags3 |= 1 << 3
+	}
 
 	writer.writeUint8(flags1)
 	writer.writeUint8(flags2)
@@ -485,6 +511,9 @@ func EncodePatch(patch *StatePatch, serverTime int64, tickIndex uint32) []byte {
 	}
 	if patch.HidePhase != nil {
 		writer.writeString(*patch.HidePhase)
+	}
+	if patch.ShootPhase != nil {
+		writer.writeString(*patch.ShootPhase)
 	}
 	if patch.Walls != nil {
 		encodeWallsBinary(patch.Walls, writer)
