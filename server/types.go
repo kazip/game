@@ -6,6 +6,7 @@ const (
 	worldSize             = 500.0
 	bombWorldScale        = 5.0
 	hideSeekWorldScale    = 3.0
+	shooterWorldScale     = 3.0
 	hideSeekHideDuration  = 60.0
 	hideSeekSeekDuration  = 180.0
 	hideSeekSeekerBoost   = 1.2

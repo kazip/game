@@ -500,6 +500,8 @@ func (s *server) getOrCreateRoom(name, mode string) *room {
 		world = worldSize * bombWorldScale
 	} else if normalizedMode == "hide-and-seek" {
 		world = worldSize * hideSeekWorldScale
+	} else if normalizedMode == "shooters" {
+		world = worldSize * shooterWorldScale
 	}
 	r := &room{
 		name:             name,
