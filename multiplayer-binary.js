@@ -110,8 +110,15 @@ class BinaryReader {
 
   readString() {
     const length = this.readUint16();
-    const bytes = new Uint8Array(this.view.buffer, this.view.byteOffset + this.offset, length);
-    this.offset += length;
+    const remaining = this.view.byteLength - this.offset;
+    const safeLength = Math.max(0, Math.min(length, remaining));
+
+    if (length > remaining) {
+      console.warn(`Truncating oversized string read: requested ${length} bytes, only ${remaining} available.`);
+    }
+
+    const bytes = new Uint8Array(this.view.buffer, this.view.byteOffset + this.offset, safeLength);
+    this.offset = Math.min(this.view.byteLength, this.offset + safeLength);
     return decoder.decode(bytes);
   }
 }
