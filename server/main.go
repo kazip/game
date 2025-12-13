@@ -60,12 +60,12 @@ func quantizeStateForSend(state *gameState) {
 	}
 }
 
-func decodeInputBuffer(data []byte) (*string, *vector) {
-	id, vec := protocol.DecodeInputBuffer(data)
+func decodeInputBuffer(data []byte) (*string, *vector, *bool) {
+	id, vec, shoot := protocol.DecodeInputBuffer(data)
 	if id == nil || vec == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return id, &vector{X: vec.X, Y: vec.Y}
+	return id, &vector{X: vec.X, Y: vec.Y}, shoot
 }
 
 func toProtocolPlayerState(p *playerState) protocol.PlayerState {
