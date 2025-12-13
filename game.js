@@ -3670,7 +3670,9 @@ class MultiplayerManager {
     }
 
     if (this.state && isExpandedWorld) {
-      drawMinimap(players, walls, worldSize, viewSize, camera);
+      const isSeeker = this.mode === "hide-and-seek" && this.state.seekerId === this.playerId;
+      const minimapPlayers = isSeeker ? players.filter((player) => player.id === this.playerId) : players;
+      drawMinimap(minimapPlayers, walls, worldSize, viewSize, camera);
     }
     multiplayerRenderHandle = requestAnimationFrame(this.renderFrameBound);
   }
