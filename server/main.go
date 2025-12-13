@@ -751,7 +751,7 @@ func (r *room) handleClientMessage(playerID string, msg wsMessage) {
 		}
 	case "chat":
 		if msg.Message != nil {
-			r.broadcastChat(*msg.Message)
+			r.broadcastChat(playerID, *msg.Message)
 		}
 	case "appearance":
 		if msg.Appearance != nil {
@@ -1639,12 +1639,21 @@ func (r *room) sendProtocolInfo(conn *websocket.Conn) {
 	conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func (r *room) broadcastChat(msg chatMessage) {
-	msg.At = time.Now().UnixMilli()
-	data, _ := json.Marshal(wsMessage{Type: "chat", Message: &msg})
+func (r *room) broadcastChat(senderID string, msg chatMessage) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for conn := range r.connections {
+
+	if player, ok := r.players[senderID]; ok {
+		msg.PlayerID = senderID
+		msg.Name = player.Name
+	}
+
+	msg.At = time.Now().UnixMilli()
+	data, _ := json.Marshal(wsMessage{Type: "chat", Message: &msg})
+	for conn, playerID := range r.connections {
+		if playerID == senderID {
+			continue
+		}
 		conn.WriteMessage(websocket.TextMessage, data)
 	}
 }
