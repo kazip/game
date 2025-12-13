@@ -1488,15 +1488,8 @@ func (r *room) findShooterTargetLocked(shooter *playerState) *playerState {
 		if p == nil || !p.Alive || p.ID == shooter.ID {
 			continue
 		}
-		dx := p.X - shooter.X
-		if shooter.Facing >= 0 && dx < 0 {
-			continue
-		}
-		if shooter.Facing < 0 && dx > 0 {
-			continue
-		}
-		dist := math.Hypot(dx, p.Y-shooter.Y)
-		if dist > 220 {
+		dist := math.Hypot(p.X-shooter.X, p.Y-shooter.Y)
+		if dist > shooterShotRange {
 			continue
 		}
 		if best == nil || dist < bestDist {
@@ -1521,25 +1514,34 @@ func (r *room) resolveShooterCombatLocked() {
 			continue
 		}
 		target := r.findShooterTargetLocked(shooter)
-		if target == nil {
-			continue
+		shotToX := shooter.X
+		shotToY := shooter.Y
+		if target != nil {
+			shotToX = target.X
+			shotToY = target.Y
+			target.Health -= shooterDamage
+			if target.Health <= 0 {
+				target.Health = 0
+				target.Alive = false
+				target.Moving = false
+				shooter.Score++
+				r.state.Message = fmt.Sprintf("%s выбил %s", fallbackName(shooter.Name), fallbackName(target.Name))
+			}
+		} else {
+			direction := 1.0
+			if shooter.Facing < 0 {
+				direction = -1.0
+			}
+			shotToX += direction * shooterShotRange
 		}
 		r.state.Shots = append(r.state.Shots, shotEvent{
 			ShooterID: shooter.ID,
 			FromX:     shooter.X,
 			FromY:     shooter.Y,
-			ToX:       target.X,
-			ToY:       target.Y,
+			ToX:       shotToX,
+			ToY:       shotToY,
 			Remaining: shooterShotLifetime,
 		})
-		target.Health -= shooterDamage
-		if target.Health <= 0 {
-			target.Health = 0
-			target.Alive = false
-			target.Moving = false
-			shooter.Score++
-			r.state.Message = fmt.Sprintf("%s выбил %s", fallbackName(shooter.Name), fallbackName(target.Name))
-		}
 	}
 	r.shootRequests = make(map[string]bool)
 }

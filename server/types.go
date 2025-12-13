@@ -15,6 +15,7 @@ const (
 	shooterDamage         = 34
 	shooterMaxHealth      = 100
 	shooterShotLifetime   = 0.35
+	shooterShotRange      = 220.0
 	catSpeed              = 180.0
 	catSize               = 36.0
 	fishSize              = 28.0
