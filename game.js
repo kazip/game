@@ -3246,6 +3246,7 @@ class MultiplayerManager {
     this.closedByUser = false;
     this.reconnecting = false;
     this.worldSize = WORLD_SIZE;
+    this.useBinaryProtocol = false;
   }
 
   async join(roomName, playerName, mode = "classic") {
@@ -3261,6 +3262,7 @@ class MultiplayerManager {
     this.closedByUser = false;
     this.cancelReconnectTimer();
     this.resetChat();
+    this.useBinaryProtocol = false;
 
     await this.openSocket();
   }
@@ -3283,6 +3285,7 @@ class MultiplayerManager {
     this.mode = "classic";
     this.worldSize = WORLD_SIZE;
     this.lastLocalCameraTarget = null;
+    this.useBinaryProtocol = false;
     this.updateReadyButton();
     this.updateHud();
   }
@@ -3329,10 +3332,10 @@ class MultiplayerManager {
         if (typeof event.data === "string") {
           const payload = JSON.parse(event.data);
           this.handleSocketMessage(payload);
-        } else if (event.data instanceof Blob) {
+        } else if (this.useBinaryProtocol && event.data instanceof Blob) {
           const buffer = await event.data.arrayBuffer();
           this.handleBinaryMessage(buffer);
-        } else if (event.data instanceof ArrayBuffer) {
+        } else if (this.useBinaryProtocol && event.data instanceof ArrayBuffer) {
           this.handleBinaryMessage(event.data);
         }
       } catch (error) {
@@ -3415,8 +3418,14 @@ class MultiplayerManager {
       case "state":
         this.handleServerState(message);
         break;
+      case "patch":
+        this.handleServerState(message);
+        break;
       case "chat":
         this.handleChatMessage(message.message || message);
+        break;
+      case "protocol":
+        this.handleProtocolMessage(message);
         break;
       case "error":
         if (multiplayerErrorEl) {
@@ -3429,13 +3438,17 @@ class MultiplayerManager {
   }
 
   handleBinaryMessage(buffer) {
-    if (!buffer) {
+    if (!buffer || !this.useBinaryProtocol) {
       return;
     }
     const payload = decodeStateFromBase64(buffer);
     if (payload?.state || payload?.patch) {
       this.handleServerState(payload);
     }
+  }
+
+  handleProtocolMessage(message) {
+    this.useBinaryProtocol = Boolean(message?.binary);
   }
 
   handleServerState(payload) {
@@ -3858,7 +3871,11 @@ class MultiplayerManager {
   }
 
   sendInput(vector) {
-    this.sendBinary(encodeInputToBuffer(this.playerId, vector));
+    if (this.useBinaryProtocol) {
+      this.sendBinary(encodeInputToBuffer(this.playerId, vector));
+      return;
+    }
+    this.sendMessage({ type: "input", vector });
   }
 
   updateInputFromControls() {

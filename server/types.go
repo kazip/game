@@ -167,6 +167,7 @@ type wsMessage struct {
 	Patch      *statePatch   `json:"patch,omitempty"`
 	Full       bool          `json:"full,omitempty"`
 	Error      string        `json:"error,omitempty"`
+	Binary     *bool         `json:"binary,omitempty"`
 }
 
 type playerPatch struct {

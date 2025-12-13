@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -425,21 +426,33 @@ type room struct {
 }
 
 type server struct {
-	cats     map[string]catProfile
-	scores   []scoreEntry
-	rooms    map[string]*room
-	mu       sync.Mutex
-	upgrader websocket.Upgrader
+	cats           map[string]catProfile
+	scores         []scoreEntry
+	rooms          map[string]*room
+	mu             sync.Mutex
+	upgrader       websocket.Upgrader
+	protocolBinary bool
 }
 
 func newServer() *server {
+	binaryProtocol := parseBoolEnv("BINARY_PROTOCOL_ENABLED")
 	srv := &server{
-		cats:     make(map[string]catProfile),
-		rooms:    make(map[string]*room),
-		upgrader: websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
+		cats:           make(map[string]catProfile),
+		rooms:          make(map[string]*room),
+		upgrader:       websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
+		protocolBinary: binaryProtocol,
 	}
 	srv.loadFromDisk()
 	return srv
+}
+
+func (s *server) binaryProtocolEnabled() bool {
+	return s.protocolBinary
+}
+
+func parseBoolEnv(key string) bool {
+	value := strings.ToLower(os.Getenv(key))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
 }
 
 func normalizeMode(mode string) string {
@@ -691,6 +704,7 @@ func (r *room) handleConnection(conn *websocket.Conn, playerID, playerName strin
 	r.cancelDisconnectTimerLocked(playerID)
 	r.mu.Unlock()
 
+	r.sendProtocolInfo(conn)
 	r.sendFullState(conn)
 
 	go func() {
@@ -704,6 +718,9 @@ func (r *room) handleConnection(conn *websocket.Conn, playerID, playerName strin
 				return
 			}
 			if messageType == websocket.BinaryMessage {
+				if !r.server.binaryProtocolEnabled() {
+					continue
+				}
 				if pid, vec := decodeInputBuffer(data); pid != nil && vec != nil {
 					r.mu.Lock()
 					r.inputs[*pid] = *vec
@@ -828,8 +845,14 @@ func (r *room) sendFullState(conn *websocket.Conn) {
 	r.mu.Unlock()
 	stateCopy.TickIndex = r.tickIndex
 	quantizeStateForSend(&stateCopy)
-	data := protocol.EncodeState(toProtocolGameState(stateCopy))
-	conn.WriteMessage(websocket.BinaryMessage, data)
+	if r.server.binaryProtocolEnabled() {
+		data := protocol.EncodeState(toProtocolGameState(stateCopy))
+		conn.WriteMessage(websocket.BinaryMessage, data)
+		return
+	}
+	msg := wsMessage{Type: "state", State: &stateCopy, Full: true}
+	data, _ := json.Marshal(msg)
+	conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func (r *room) run() {
@@ -1571,8 +1594,13 @@ func (r *room) broadcastState() {
 	r.state.Fish.Spawned = false
 	r.mu.Unlock()
 
-	var data []byte
 	protoState := toProtocolGameState(stateCopy)
+	if !r.server.binaryProtocolEnabled() {
+		r.broadcastJSONState(stateCopy, previous, connections)
+		return
+	}
+
+	var data []byte
 	if previous == nil {
 		data = protocol.EncodeState(protoState)
 	} else if patch := buildStatePatch(*previous, stateCopy); patch != nil {
@@ -1583,6 +1611,32 @@ func (r *room) broadcastState() {
 	for _, conn := range connections {
 		conn.WriteMessage(websocket.BinaryMessage, data)
 	}
+}
+
+func (r *room) broadcastJSONState(stateCopy gameState, previous *gameState, connections []*websocket.Conn) {
+	if previous == nil {
+		payload := wsMessage{Type: "state", State: &stateCopy, Full: true}
+		data, _ := json.Marshal(payload)
+		for _, conn := range connections {
+			conn.WriteMessage(websocket.TextMessage, data)
+		}
+		return
+	}
+
+	if patch := buildStatePatch(*previous, stateCopy); patch != nil {
+		payload := wsMessage{Type: "patch", Patch: patch}
+		data, _ := json.Marshal(payload)
+		for _, conn := range connections {
+			conn.WriteMessage(websocket.TextMessage, data)
+		}
+	}
+}
+
+func (r *room) sendProtocolInfo(conn *websocket.Conn) {
+	binary := r.server.binaryProtocolEnabled()
+	payload := wsMessage{Type: "protocol", Binary: boolPtr(binary)}
+	data, _ := json.Marshal(payload)
+	conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func (r *room) broadcastChat(msg chatMessage) {
