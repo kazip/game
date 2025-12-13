@@ -186,6 +186,16 @@ func clampFloat(v, min, max float64) float64 {
 	return v
 }
 
+func clampInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
 func fallbackName(name string) string {
 	if name == "" {
 		return "Игрок"

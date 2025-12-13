@@ -93,6 +93,17 @@ func (r *binaryReader) readUint8() (uint8, error) {
 	return value, nil
 }
 
+func (r *binaryReader) readBool() (bool, error) {
+	value, err := r.readUint8()
+	if err != nil {
+		return false, err
+	}
+	if value > 1 {
+		return false, fmt.Errorf("invalid boolean value: %d", value)
+	}
+	return value == 1, nil
+}
+
 func (r *binaryReader) readUint16() (uint16, error) {
 	if r.offset+2 > len(r.data) {
 		return 0, fmt.Errorf("out of bounds")
