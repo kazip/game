@@ -3,7 +3,21 @@ const decoder = new TextDecoder();
 
 const PHASE_CODES = { lobby: 0, countdown: 1, playing: 2, ended: 3 };
 const FISH_TYPE_CODES = { normal: 0, golden: 1, timeIncrease: 2, timeDecrease: 3 };
-const POWER_UP_TYPE_CODES = { none: 0, fast: 1, slow: 2, invert: 3, memory: 4 };
+const POWER_UP_TYPE_CODES = {
+  none: 0,
+  fast: 1,
+  slow: 2,
+  invert: 3,
+  memory: 4,
+  chair: 5,
+  table: 6,
+  fish: 7,
+  duck: 8,
+  goose: 9,
+  goldfish: 10,
+  mine: 11,
+  alarm: 12
+};
 const MESSAGE_TYPES = { full: 0, patch: 1 };
 
 class BinaryWriter {

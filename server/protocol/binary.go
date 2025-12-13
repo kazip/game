@@ -10,7 +10,21 @@ import (
 var (
 	phaseCodes       = map[string]uint8{"lobby": 0, "countdown": 1, "playing": 2, "ended": 3}
 	fishTypeCodes    = map[string]uint8{"normal": 0, "golden": 1, "timeIncrease": 2, "timeDecrease": 3}
-	powerUpTypeCodes = map[string]uint8{"none": 0, "fast": 1, "slow": 2, "invert": 3, "memory": 4}
+	powerUpTypeCodes = map[string]uint8{
+		"none":     0,
+		"fast":     1,
+		"slow":     2,
+		"invert":   3,
+		"memory":   4,
+		"chair":    5,
+		"table":    6,
+		"fish":     7,
+		"duck":     8,
+		"goose":    9,
+		"goldfish": 10,
+		"mine":     11,
+		"alarm":    12,
+	}
 
 	messageTypeFull  uint8 = 0
 	messageTypePatch uint8 = 1

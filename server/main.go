@@ -1286,10 +1286,12 @@ func (r *room) spawnHideAndSeekItemsLocked() []powerUpState {
 	world := r.currentWorldSize()
 	items := make([]powerUpState, 0, count)
 	margin := 20.0
+	disguiseTypes := []string{"memory", "chair", "table", "fish", "duck", "goose", "goldfish", "mine", "alarm"}
 	for i := 0; i < count; i++ {
 		x := rand.Float64()*(world-2*margin) + margin
 		y := rand.Float64()*(world-2*margin) + margin
-		items = append(items, powerUpState{X: x, Y: y, Size: powerUpSize, Active: true, Remaining: 60, Type: "memory"})
+		disguise := disguiseTypes[rand.Intn(len(disguiseTypes))]
+		items = append(items, powerUpState{X: x, Y: y, Size: powerUpSize, Active: true, Remaining: 60, Type: disguise})
 	}
 	return items
 }
