@@ -1473,19 +1473,24 @@ func (r *room) updateStatusEffectLocked() {
 }
 
 func (r *room) getSpeedMultiplierLocked(playerID string) float64 {
+	multiplier := 1.0
+	if r.isHideSeekMode() && r.state.HidePhase == "seeking" && r.state.SeekerID == playerID {
+		multiplier *= hideSeekSeekerBoost
+	}
+
 	if r.state.Status == nil {
-		return 1
+		return multiplier
 	}
 	if r.state.Status.PlayerID != "" && r.state.Status.PlayerID != playerID {
-		return 1
+		return multiplier
 	}
 	switch r.state.Status.Type {
 	case "speedUp":
-		return 2
+		return multiplier * 2
 	case "speedDown":
-		return 1 / 1.5
+		return multiplier / 1.5
 	default:
-		return 1
+		return multiplier
 	}
 }
 
