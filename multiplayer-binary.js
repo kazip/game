@@ -244,8 +244,7 @@ function decodePlayers(reader) {
       moving: reader.readBool(),
       walkCycle: reader.readFloat32(),
       stepAccumulator: reader.readFloat32(),
-      appearance: {},
-      disguise: reader.readString()
+      appearance: {}
     };
     const appearanceString = reader.readString();
     if (appearanceString) {
@@ -255,6 +254,7 @@ function decodePlayers(reader) {
         player.appearance = {};
       }
     }
+    player.disguise = reader.readString();
     players.push(player);
   }
   return players;
