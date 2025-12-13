@@ -8,6 +8,7 @@ const (
 	hideSeekWorldScale    = 3.0
 	hideSeekHideDuration  = 60.0
 	hideSeekSeekDuration  = 180.0
+	hideSeekSeekerBoost   = 1.2
 	catSpeed              = 180.0
 	catSize               = 36.0
 	fishSize              = 28.0
