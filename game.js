@@ -135,7 +135,7 @@ function getWorldSizeForMode(mode) {
   if (mode === "bomb-pass") {
     return BOMB_MODE_WORLD_SIZE;
   }
-  if (mode === "hide-and-seek") {
+  if (mode === "hide-and-seek" || mode === "shooters") {
     return HIDE_SEEK_WORLD_SIZE;
   }
   return WORLD_SIZE;
@@ -181,6 +181,7 @@ const timerEl = document.getElementById("timer");
 const controlsContainer = document.querySelector(".controls");
 const joystickBase = document.querySelector(".joystick-base");
 const joystickThumb = document.querySelector(".joystick-thumb");
+const shootButton = document.getElementById("shoot-button");
 const statusEffectIconEl = document.getElementById("status-effect-icon");
 const leaderboardEl = document.getElementById("leaderboard");
 const submitScoreForm = document.getElementById("submit-score");
@@ -4241,6 +4242,15 @@ window.addEventListener("keyup", (event) => {
 
 if (canvas) {
   canvas.addEventListener("click", () => {
+    if (gameMode === "multiplayer" && multiplayerManager) {
+      multiplayerManager.requestShoot();
+    }
+  });
+}
+
+if (shootButton) {
+  shootButton.addEventListener("click", () => {
+    ensureAudioActive();
     if (gameMode === "multiplayer" && multiplayerManager) {
       multiplayerManager.requestShoot();
     }
