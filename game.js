@@ -2893,12 +2893,152 @@ function drawWalls() {
   drawWallsCollection(walls);
 }
 
+function drawHideAndSeekProp(type, size) {
+  const half = size / 2;
+  switch (type) {
+    case "chair": {
+      ctx.fillStyle = "#8d6e63";
+      ctx.strokeStyle = "#5d4037";
+      ctx.lineWidth = 3;
+      ctx.fillRect(-half * 0.5, -half * 0.6, half, half * 0.4);
+      ctx.strokeRect(-half * 0.5, -half * 0.6, half, half * 0.4);
+      ctx.fillRect(-half * 0.6, -half * 0.2, half * 1.2, half * 0.3);
+      ctx.strokeRect(-half * 0.6, -half * 0.2, half * 1.2, half * 0.3);
+      ctx.fillRect(-half * 0.6, half * 0.1, half * 0.2, half * 0.7);
+      ctx.fillRect(half * 0.4, half * 0.1, half * 0.2, half * 0.7);
+      ctx.strokeRect(-half * 0.6, half * 0.1, half * 0.2, half * 0.7);
+      ctx.strokeRect(half * 0.4, half * 0.1, half * 0.2, half * 0.7);
+      break;
+    }
+    case "table": {
+      ctx.fillStyle = "#a1887f";
+      ctx.strokeStyle = "#4e342e";
+      ctx.lineWidth = 3;
+      ctx.fillRect(-half * 0.8, -half * 0.2, size * 0.8, half * 0.4);
+      ctx.strokeRect(-half * 0.8, -half * 0.2, size * 0.8, half * 0.4);
+      ctx.fillRect(-half * 0.7, half * 0.2, half * 0.2, half * 0.8);
+      ctx.fillRect(half * 0.3, half * 0.2, half * 0.2, half * 0.8);
+      ctx.strokeRect(-half * 0.7, half * 0.2, half * 0.2, half * 0.8);
+      ctx.strokeRect(half * 0.3, half * 0.2, half * 0.2, half * 0.8);
+      break;
+    }
+    case "fish":
+    case "goldfish": {
+      const bodyColor = type === "goldfish" ? "#f9a825" : "#42a5f5";
+      ctx.fillStyle = bodyColor;
+      ctx.strokeStyle = "#1a237e";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(-half * 0.1, 0, half * 0.7, half * 0.45, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(half * 0.4, 0);
+      ctx.lineTo(half * 0.8, -half * 0.3);
+      ctx.lineTo(half * 0.8, half * 0.3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#0d47a1";
+      ctx.beginPath();
+      ctx.arc(-half * 0.45, -half * 0.1, half * 0.08, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case "duck":
+    case "goose": {
+      const bodyColor = type === "goose" ? "#f5f5f5" : "#ffd54f";
+      const beakColor = type === "goose" ? "#ef6c00" : "#f57f17";
+      ctx.fillStyle = bodyColor;
+      ctx.strokeStyle = "#4e342e";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.ellipse(0, half * 0.1, half * 0.6, half * 0.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(-half * 0.2, -half * 0.35, half * 0.3, half * 0.25, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = beakColor;
+      ctx.beginPath();
+      ctx.moveTo(-half * 0.5, -half * 0.35);
+      ctx.lineTo(-half * 0.7, -half * 0.28);
+      ctx.lineTo(-half * 0.5, -half * 0.22);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#212121";
+      ctx.beginPath();
+      ctx.arc(-half * 0.3, -half * 0.42, half * 0.05, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case "mine": {
+      const radius = size / 2;
+      const gradient = ctx.createRadialGradient(0, 0, radius * 0.3, 0, 0, radius);
+      gradient.addColorStop(0, "#ff5252");
+      gradient.addColorStop(1, "#5a1b1b");
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#2b0d0d";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (let i = 0; i < 8; i += 1) {
+        const angle = (i / 8) * Math.PI * 2;
+        ctx.moveTo(Math.cos(angle) * radius * 0.5, Math.sin(angle) * radius * 0.5);
+        ctx.lineTo(Math.cos(angle) * radius * 0.95, Math.sin(angle) * radius * 0.95);
+      }
+      ctx.stroke();
+      break;
+    }
+    case "alarm": {
+      ctx.fillStyle = "#ff7043";
+      ctx.strokeStyle = "#4e342e";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, half * 0.9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(0, 0, half * 0.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = "#bf360c";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, -half * 0.4);
+      ctx.moveTo(0, 0);
+      ctx.lineTo(half * 0.35, 0);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(-half * 0.5, -half * 0.75, half * 0.25, Math.PI, 0);
+      ctx.arc(half * 0.5, -half * 0.75, half * 0.25, Math.PI, 0);
+      ctx.fillStyle = "#ffab91";
+      ctx.fill();
+      ctx.stroke();
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 function drawPowerUpSprite(powerUpState) {
   if (!powerUpState || !powerUpState.active) return;
   ctx.save();
   ctx.translate(powerUpState.x, powerUpState.y);
   const size = powerUpState.size;
   const half = size / 2;
+  const disguiseTypes = ["memory", "chair", "table", "fish", "duck", "goose", "goldfish", "mine", "alarm"];
+  if (disguiseTypes.includes(powerUpState.type)) {
+    drawHideAndSeekProp(powerUpState.type, size);
+    ctx.restore();
+    return;
+  }
   if (HOLIDAY_MODE_ENABLED) {
     const bodyGradient = ctx.createLinearGradient(-half, -half, half, half);
     bodyGradient.addColorStop(0, "#1e88e5");
