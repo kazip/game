@@ -857,6 +857,14 @@ canvas {
   text-align: center;
 }
 
+.controls-main {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
 .controls button {
   padding: 12px 18px;
   border-radius: 14px;
@@ -974,6 +982,11 @@ canvas {
 
   .controls {
     display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .controls-main {
+    flex-wrap: nowrap;
   }
 
   .joystick-hint {
