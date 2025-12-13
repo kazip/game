@@ -1482,16 +1482,33 @@ func (r *room) tickShooterPhaseLocked() {
 }
 
 func (r *room) findShooterTargetLocked(shooter *playerState) *playerState {
+	if shooter == nil {
+		return nil
+	}
+
 	var best *playerState
 	bestDist := 0.0
 	for _, p := range r.players {
 		if p == nil || !p.Alive || p.ID == shooter.ID {
 			continue
 		}
-		dist := math.Hypot(p.X-shooter.X, p.Y-shooter.Y)
+
+		dx := p.X - shooter.X
+		if shooter.Facing > 0 && dx < 0 {
+			continue
+		}
+		if shooter.Facing < 0 && dx > 0 {
+			continue
+		}
+
+		dist := math.Hypot(dx, p.Y-shooter.Y)
 		if dist > shooterShotRange {
 			continue
 		}
+		if !r.hasLineOfSight(shooter.X, shooter.Y, p.X, p.Y) {
+			continue
+		}
+
 		if best == nil || dist < bestDist {
 			best = p
 			bestDist = dist
@@ -1534,6 +1551,12 @@ func (r *room) resolveShooterCombatLocked() {
 			}
 			shotToX += direction * shooterShotRange
 		}
+
+		if hitX, hitY, blocked := r.findWallIntersection(shooter.X, shooter.Y, shotToX, shotToY); blocked {
+			shotToX = hitX
+			shotToY = hitY
+		}
+
 		r.state.Shots = append(r.state.Shots, shotEvent{
 			ShooterID: shooter.ID,
 			FromX:     shooter.X,
@@ -2364,6 +2387,80 @@ func circleIntersectsRect(cx, cy, radius float64, rect wall) bool {
 	dx := cx - closestX
 	dy := cy - closestY
 	return dx*dx+dy*dy < radius*radius
+}
+
+func pointInsideRect(x, y float64, rect wall) bool {
+	return x >= rect.X && x <= rect.X+rect.Width && y >= rect.Y && y <= rect.Y+rect.Height
+}
+
+func lineIntersectsRect(fromX, fromY, toX, toY float64, rect wall) (bool, float64) {
+	dx := toX - fromX
+	dy := toY - fromY
+	p := [4]float64{-dx, dx, -dy, dy}
+	q := [4]float64{fromX - rect.X, rect.X + rect.Width - fromX, fromY - rect.Y, rect.Y + rect.Height - fromY}
+	u1, u2 := 0.0, 1.0
+
+	for i := 0; i < 4; i++ {
+		if p[i] == 0 {
+			if q[i] < 0 {
+				return false, 0
+			}
+			continue
+		}
+		t := q[i] / p[i]
+		if p[i] < 0 {
+			if t > u2 {
+				return false, 0
+			}
+			if t > u1 {
+				u1 = t
+			}
+		} else {
+			if t < u1 {
+				return false, 0
+			}
+			if t < u2 {
+				u2 = t
+			}
+		}
+	}
+
+	if u1 < 0 || u1 > 1 {
+		return false, 0
+	}
+	return true, u1
+}
+
+func (r *room) hasLineOfSight(fromX, fromY, toX, toY float64) bool {
+	for _, w := range r.state.Walls {
+		intersects, _ := lineIntersectsRect(fromX, fromY, toX, toY, w)
+		if intersects {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *room) findWallIntersection(fromX, fromY, toX, toY float64) (float64, float64, bool) {
+	var closestT float64 = 1.1
+	hit := false
+	for _, w := range r.state.Walls {
+		if pointInsideRect(fromX, fromY, w) {
+			continue
+		}
+		intersects, t := lineIntersectsRect(fromX, fromY, toX, toY, w)
+		if intersects && t >= 0 && t < closestT {
+			closestT = t
+			hit = true
+		}
+	}
+	if !hit {
+		return 0, 0, false
+	}
+
+	hitX := fromX + (toX-fromX)*closestT
+	hitY := fromY + (toY-fromY)*closestT
+	return hitX, hitY, true
 }
 
 func circleIntersectsAnyWall(cx, cy, radius float64, walls []wall) bool {
