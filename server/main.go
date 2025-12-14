@@ -1481,42 +1481,6 @@ func (r *room) tickShooterPhaseLocked() {
 	}
 }
 
-func (r *room) findShooterTargetLocked(shooter *playerState) *playerState {
-	if shooter == nil {
-		return nil
-	}
-
-	var best *playerState
-	bestDist := 0.0
-	for _, p := range r.players {
-		if p == nil || !p.Alive || p.ID == shooter.ID {
-			continue
-		}
-
-		dx := p.X - shooter.X
-		if shooter.Facing > 0 && dx < 0 {
-			continue
-		}
-		if shooter.Facing < 0 && dx > 0 {
-			continue
-		}
-
-		dist := math.Hypot(dx, p.Y-shooter.Y)
-		if dist > shooterShotRange {
-			continue
-		}
-		if !r.hasLineOfSight(shooter.X, shooter.Y, p.X, p.Y) {
-			continue
-		}
-
-		if best == nil || dist < bestDist {
-			best = p
-			bestDist = dist
-		}
-	}
-	return best
-}
-
 func (r *room) resolveShooterCombatLocked() {
 	if !r.isShooterMode() || len(r.shootRequests) == 0 {
 		r.shootRequests = make(map[string]bool)
@@ -1530,12 +1494,49 @@ func (r *room) resolveShooterCombatLocked() {
 		if shooter == nil || !shooter.Alive || shooter.Weapon == "" {
 			continue
 		}
-		target := r.findShooterTargetLocked(shooter)
-		shotToX := shooter.X
+
+		direction := 1.0
+		if shooter.Facing < 0 {
+			direction = -1.0
+		}
+
+		shotToX := shooter.X + direction*shooterShotRange
 		shotToY := shooter.Y
+
+		var target *playerState
+		bestDist := shooterShotRange + 1
+		for _, p := range r.players {
+			if p == nil || !p.Alive || p.ID == shooter.ID {
+				continue
+			}
+
+			dx := p.X - shooter.X
+			if direction > 0 && dx <= 0 {
+				continue
+			}
+			if direction < 0 && dx >= 0 {
+				continue
+			}
+
+			dist := math.Abs(dx)
+			if dist > shooterShotRange {
+				continue
+			}
+			if math.Abs(p.Y-shooter.Y) > p.Size/2 {
+				continue
+			}
+			if !r.hasLineOfSight(shooter.X, shooter.Y, p.X, shooter.Y) {
+				continue
+			}
+
+			if dist < bestDist {
+				target = p
+				bestDist = dist
+			}
+		}
+
 		if target != nil {
 			shotToX = target.X
-			shotToY = target.Y
 			target.Health -= shooterDamage
 			if target.Health <= 0 {
 				target.Health = 0
@@ -1544,12 +1545,6 @@ func (r *room) resolveShooterCombatLocked() {
 				shooter.Score++
 				r.state.Message = fmt.Sprintf("%s выбил %s", fallbackName(shooter.Name), fallbackName(target.Name))
 			}
-		} else {
-			direction := 1.0
-			if shooter.Facing < 0 {
-				direction = -1.0
-			}
-			shotToX += direction * shooterShotRange
 		}
 
 		if hitX, hitY, blocked := r.findWallIntersection(shooter.X, shooter.Y, shotToX, shotToY); blocked {
