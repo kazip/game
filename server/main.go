@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -480,17 +481,22 @@ type server struct {
 	rooms          map[string]*room
 	mu             sync.Mutex
 	upgrader       websocket.Upgrader
+	allowedOrigins map[string]struct{}
+	allowAllOrigin bool
 	protocolBinary bool
 }
 
 func newServer() *server {
 	binaryProtocol := parseBoolEnv("BINARY_PROTOCOL_ENABLED")
+	allowedOrigins, allowAllOrigin := parseAllowedOrigins("ALLOWED_ORIGINS")
 	srv := &server{
 		cats:           make(map[string]catProfile),
 		rooms:          make(map[string]*room),
-		upgrader:       websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
+		allowedOrigins: allowedOrigins,
+		allowAllOrigin: allowAllOrigin,
 		protocolBinary: binaryProtocol,
 	}
+	srv.upgrader = websocket.Upgrader{CheckOrigin: srv.checkOrigin}
 	srv.loadFromDisk()
 	return srv
 }
@@ -502,6 +508,76 @@ func (s *server) binaryProtocolEnabled() bool {
 func parseBoolEnv(key string) bool {
 	value := strings.ToLower(os.Getenv(key))
 	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func parseAllowedOrigins(key string) (map[string]struct{}, bool) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil, false
+	}
+	origins := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		if value == "*" {
+			return nil, true
+		}
+		normalized, ok := normalizeOrigin(value)
+		if !ok {
+			log.Printf("ignoring invalid origin in %s: %q", key, value)
+			continue
+		}
+		origins[normalized] = struct{}{}
+	}
+	return origins, false
+}
+
+func normalizeOrigin(origin string) (string, bool) {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return "", false
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", false
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), true
+}
+
+func requestScheme(r *http.Request) string {
+	forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if forwarded != "" {
+		return strings.ToLower(strings.TrimSpace(strings.Split(forwarded, ",")[0]))
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+func (s *server) checkOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return false
+	}
+
+	normalizedOrigin, ok := normalizeOrigin(origin)
+	if !ok {
+		return false
+	}
+
+	if s.allowAllOrigin {
+		return true
+	}
+
+	if len(s.allowedOrigins) > 0 {
+		_, allowed := s.allowedOrigins[normalizedOrigin]
+		return allowed
+	}
+
+	expectedOrigin := strings.ToLower(requestScheme(r) + "://" + r.Host)
+	return normalizedOrigin == expectedOrigin
 }
 
 func normalizeMode(mode string) string {

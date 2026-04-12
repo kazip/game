@@ -12,3 +12,18 @@ go run .
 ```
 
 Фронтенд по умолчанию стучится в тот же origin, так что достаточно запустить сервер рядом со статикой или настроить `window.CAT_SERVER_URL` перед загрузкой скрипта.
+
+Для WebSocket сервер проверяет `Origin`:
+
+- по умолчанию разрешён только тот же origin (`scheme://host`) что и у входящего запроса;
+- можно задать whitelist через `ALLOWED_ORIGINS` (значения через запятую), например:
+
+```bash
+ALLOWED_ORIGINS="http://localhost:8080,https://example.com" go run .
+```
+
+Для локальной отладки можно временно разрешить любой origin:
+
+```bash
+ALLOWED_ORIGINS="*" go run .
+```
