@@ -1,0 +1,104 @@
+name: Deploy Go server
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "server/**"
+      - ".github/workflows/deploy-server.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-server-main
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SERVER_SSH_HOST: ${{ secrets.SERVER_SSH_HOST }}
+      SERVER_SSH_USER: ${{ secrets.SERVER_SSH_USER }}
+      SERVER_SSH_PORT: ${{ secrets.SERVER_SSH_PORT || '22' }}
+      SERVER_SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_PRIVATE_KEY }}
+      SERVER_DEPLOY_PATH: ${{ secrets.SERVER_DEPLOY_PATH }}
+      SERVER_SYSTEMD_SERVICE: ${{ secrets.SERVER_SYSTEMD_SERVICE }}
+      SERVER_ALLOWED_ORIGINS: ${{ secrets.SERVER_ALLOWED_ORIGINS }}
+      SERVER_BINARY_PROTOCOL_ENABLED: ${{ secrets.SERVER_BINARY_PROTOCOL_ENABLED }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Validate required deployment secrets
+        run: |
+          set -euo pipefail
+          required=(
+            SERVER_SSH_HOST
+            SERVER_SSH_USER
+            SERVER_SSH_PRIVATE_KEY
+            SERVER_DEPLOY_PATH
+            SERVER_SYSTEMD_SERVICE
+          )
+          for key in "${required[@]}"; do
+            if [ -z "${!key}" ]; then
+              echo "Missing required secret: $key"
+              exit 1
+            fi
+          done
+
+      - name: Build server binary
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          go build -o build/catgame-server ./server
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf "%s\n" "$SERVER_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -p "$SERVER_SSH_PORT" "$SERVER_SSH_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+      - name: Upload and activate new release
+        run: |
+          set -euo pipefail
+          release_name="catgame-server-${GITHUB_SHA}"
+          remote_release_path="${SERVER_DEPLOY_PATH}/releases/${release_name}"
+          remote_tmp_path="${SERVER_DEPLOY_PATH}/${release_name}.tmp"
+          remote_link_path="${SERVER_DEPLOY_PATH}/current/catgame-server"
+          remote_env_path="${SERVER_DEPLOY_PATH}/shared/server.env"
+
+          ssh -p "$SERVER_SSH_PORT" "${SERVER_SSH_USER}@${SERVER_SSH_HOST}" \
+            "set -euo pipefail; mkdir -p '${SERVER_DEPLOY_PATH}/releases' '${SERVER_DEPLOY_PATH}/current' '${SERVER_DEPLOY_PATH}/shared'"
+
+          scp -P "$SERVER_SSH_PORT" build/catgame-server "${SERVER_SSH_USER}@${SERVER_SSH_HOST}:${remote_tmp_path}"
+
+          ssh -p "$SERVER_SSH_PORT" "${SERVER_SSH_USER}@${SERVER_SSH_HOST}" <<EOF
+          set -euo pipefail
+          install -m 755 "${remote_tmp_path}" "${remote_release_path}"
+          rm -f "${remote_tmp_path}"
+          ln -sfn "${remote_release_path}" "${remote_link_path}"
+          if [ -n "${SERVER_ALLOWED_ORIGINS}" ] || [ -n "${SERVER_BINARY_PROTOCOL_ENABLED}" ]; then
+            {
+              if [ -n "${SERVER_ALLOWED_ORIGINS}" ]; then
+                printf 'ALLOWED_ORIGINS=%s\n' "${SERVER_ALLOWED_ORIGINS}"
+              fi
+              if [ -n "${SERVER_BINARY_PROTOCOL_ENABLED}" ]; then
+                printf 'BINARY_PROTOCOL_ENABLED=%s\n' "${SERVER_BINARY_PROTOCOL_ENABLED}"
+              fi
+            } > "${remote_env_path}"
+          fi
+          sudo systemctl restart "${SERVER_SYSTEMD_SERVICE}"
+          sudo systemctl is-active --quiet "${SERVER_SYSTEMD_SERVICE}"
+          EOF
