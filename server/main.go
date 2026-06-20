@@ -1149,8 +1149,12 @@ func (r *room) updatePlayersLocked() {
 		p.Y += input.Y * speed
 		p.Moving = math.Abs(input.X) > 0.01 || math.Abs(input.Y) > 0.01
 		if p.Moving {
-			p.Facing = 1
-			if input.X < -0.01 {
+			// Only horizontal movement changes the way the cat looks; moving
+			// purely up/down keeps the previous facing so cats shoot where they
+			// are looking, not where they last walked.
+			if input.X > 0.01 {
+				p.Facing = 1
+			} else if input.X < -0.01 {
 				p.Facing = -1
 			}
 			p.StepAccum += tickRate.Seconds() * 4
