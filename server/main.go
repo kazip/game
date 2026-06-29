@@ -1573,27 +1573,36 @@ func (r *room) resolveShooterCombatLocked() {
 			continue
 		}
 		shooter := r.players[shooterID]
-		if shooter == nil || !shooter.Alive || shooter.Weapon == "" {
+		if shooter == nil || !shooter.Alive || shooter.ShootCD > 0 {
 			continue
 		}
-		// Respect the per-weapon cooldown and ammo count.
-		if shooter.ShootCD > 0 || shooter.Ammo <= 0 {
-			continue
+
+		// With a loaded weapon → ranged shot; otherwise → bare-paws punch.
+		hasWeapon := shooter.Weapon != "" && shooter.Ammo > 0
+		var atkRange float64
+		var atkDamage int
+		if hasWeapon {
+			atkRange = shooterShotRange
+			atkDamage = shooterDamage
+			shooter.Ammo--
+			shooter.ShootCD = weaponCooldown[shooter.Weapon]
+		} else {
+			atkRange = shooterFistRange
+			atkDamage = shooterFistDamage
+			shooter.ShootCD = shooterFistCooldown
 		}
-		shooter.Ammo--
-		shooter.ShootCD = weaponCooldown[shooter.Weapon]
-		emptied := shooter.Ammo <= 0
+		emptied := hasWeapon && shooter.Ammo <= 0
 
 		direction := 1.0
 		if shooter.Facing < 0 {
 			direction = -1.0
 		}
 
-		shotToX := shooter.X + direction*shooterShotRange
+		shotToX := shooter.X + direction*atkRange
 		shotToY := shooter.Y
 
 		var target *playerState
-		bestDist := shooterShotRange + 1
+		bestDist := atkRange + 1
 		for _, p := range r.players {
 			if p == nil || !p.Alive || p.ID == shooter.ID {
 				continue
@@ -1608,7 +1617,7 @@ func (r *room) resolveShooterCombatLocked() {
 			}
 
 			dist := math.Abs(dx)
-			if dist > shooterShotRange {
+			if dist > atkRange {
 				continue
 			}
 			if math.Abs(p.Y-shooter.Y) > p.Size/2 {
@@ -1627,7 +1636,7 @@ func (r *room) resolveShooterCombatLocked() {
 		if target != nil {
 			shotToX = target.X
 			// Armor absorbs damage first (1:1) as a buffer, the rest hits health.
-			dmg := shooterDamage
+			dmg := atkDamage
 			if target.Armor > 0 {
 				absorbed := min(target.Armor, dmg)
 				target.Armor -= absorbed
@@ -1644,7 +1653,7 @@ func (r *room) resolveShooterCombatLocked() {
 			}
 		}
 
-		// Running out of ammo drops the weapon — go find another.
+		// Running out of ammo drops the weapon — go find another (or use fists).
 		if emptied {
 			shooter.Weapon = ""
 		}

@@ -19,6 +19,9 @@ const (
 	shooterRegenRate      = 4.0  // health points regenerated per second
 	shooterRegenDelay     = 3.0  // seconds without damage before regen resumes
 	shooterMedkitHeal     = 50   // health restored by a medkit
+	shooterFistRange      = 52.0 // melee reach when out of ammo (very short)
+	shooterFistDamage     = 16   // damage of a bare-paws hit
+	shooterFistCooldown   = 0.5  // seconds between punches
 	catSpeed              = 180.0
 	catSize               = 36.0
 	fishSize              = 28.0
