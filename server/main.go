@@ -277,7 +277,7 @@ func (r *room) snapshotLocked() gameState {
 }
 
 func (p playerPatch) isEmpty() bool {
-	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && p.Health == nil && p.Weapon == nil && len(p.Appearance) == 0 && p.Disguise == nil
+	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && p.Health == nil && p.Weapon == nil && p.Ammo == nil && p.Armor == nil && len(p.Appearance) == 0 && p.Disguise == nil
 }
 
 func buildPlayerPatch(previous, current *playerState) *playerPatch {
@@ -323,6 +323,12 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 	}
 	if previous == nil || previous.Weapon != current.Weapon {
 		patch.Weapon = stringPtr(current.Weapon)
+	}
+	if previous == nil || previous.Ammo != current.Ammo {
+		patch.Ammo = intPtr(current.Ammo)
+	}
+	if previous == nil || previous.Armor != current.Armor {
+		patch.Armor = intPtr(current.Armor)
 	}
 	if !appearanceEqual(previous, current) {
 		patch.Appearance = current.Appearance
@@ -963,6 +969,7 @@ func (r *room) step() {
 			if r.shootingUnlocked {
 				r.resolveShooterCombatLocked()
 			}
+			r.tickShooterPlayersLocked()
 			r.updateShotsLocked()
 			if r.state.Remaining <= 0 {
 				r.endRoundLocked("Время вышло")
@@ -1068,6 +1075,11 @@ func (r *room) beginRoundLocked() {
 		p.Size = catSize
 		p.Health = shooterMaxHealth
 		p.Weapon = ""
+		p.Ammo = 0
+		p.Armor = 0
+		p.ShootCD = 0
+		p.RegenDelay = 0
+		p.RegenAccum = 0
 	}
 	r.state.BombHolder = ""
 	r.state.BombTimer = bombTimerDuration
@@ -1440,14 +1452,28 @@ func (r *room) spawnShooterLootLocked() []powerUpState {
 		return nil
 	}
 	world := r.currentWorldSize()
-	count := clampInt(totalPlayers*2, 3, 12)
 	margin := 20.0
 	weapons := []string{"blaster", "laser", "pistol", "plasma"}
-	loot := make([]powerUpState, 0, count)
-	for i := 0; i < count; i++ {
+	armors := []string{"armor1", "armor2", "armor3"}
+
+	weaponCount := clampInt(totalPlayers*2, 3, 12)
+	medkitCount := clampInt(totalPlayers, 2, 6)
+	armorCount := clampInt(totalPlayers, 2, 5)
+
+	loot := make([]powerUpState, 0, weaponCount+medkitCount+armorCount)
+	addItem := func(itemType string) {
 		x := rand.Float64()*(world-2*margin) + margin
 		y := rand.Float64()*(world-2*margin) + margin
-		loot = append(loot, powerUpState{X: x, Y: y, Size: powerUpSize, Active: true, Remaining: shooterPrepDuration, Type: weapons[rand.Intn(len(weapons))]})
+		loot = append(loot, powerUpState{X: x, Y: y, Size: powerUpSize, Active: true, Remaining: shooterRoundDuration, Type: itemType})
+	}
+	for i := 0; i < weaponCount; i++ {
+		addItem(weapons[rand.Intn(len(weapons))])
+	}
+	for i := 0; i < medkitCount; i++ {
+		addItem("medkit")
+	}
+	for i := 0; i < armorCount; i++ {
+		addItem(armors[rand.Intn(len(armors))])
 	}
 	return loot
 }
@@ -1461,13 +1487,65 @@ func (r *room) collectShooterLootLocked(p *playerState) {
 		if !item.Active {
 			continue
 		}
-		dist := math.Hypot(p.X-item.X, p.Y-item.Y)
-		if dist <= (p.Size+item.Size)/2 {
+		if math.Hypot(p.X-item.X, p.Y-item.Y) > (p.Size+item.Size)/2 {
+			continue
+		}
+		// Weapon: replace current weapon and refill its ammo.
+		if ammo, ok := weaponAmmo[item.Type]; ok {
 			p.Weapon = item.Type
+			p.Ammo = ammo
 			item.Active = false
 			item.Remaining = 0
 			r.state.Message = fmt.Sprintf("%s нашёл оружие: %s", fallbackName(p.Name), item.Type)
 			return
+		}
+		// Medkit: only useful (and consumed) when hurt.
+		if item.Type == "medkit" {
+			if p.Health < shooterMaxHealth {
+				p.Health = min(shooterMaxHealth, p.Health+shooterMedkitHeal)
+				item.Active = false
+				item.Remaining = 0
+				r.state.Message = fmt.Sprintf("%s подобрал аптечку", fallbackName(p.Name))
+				return
+			}
+			continue // full health → leave it, keep checking other items
+		}
+		// Armor: only pick up if it upgrades the current armor.
+		if pts, ok := armorPoints[item.Type]; ok {
+			if pts > p.Armor {
+				p.Armor = pts
+				item.Active = false
+				item.Remaining = 0
+				r.state.Message = fmt.Sprintf("%s нашёл броню", fallbackName(p.Name))
+				return
+			}
+			continue
+		}
+	}
+}
+
+// Per-tick shooter upkeep: cooldown countdown and slow health regeneration
+// that pauses for a few seconds after taking damage.
+func (r *room) tickShooterPlayersLocked() {
+	dt := tickRate.Seconds()
+	for _, p := range r.players {
+		if p == nil || !p.Alive {
+			continue
+		}
+		if p.ShootCD > 0 {
+			p.ShootCD = math.Max(0, p.ShootCD-dt)
+		}
+		if p.RegenDelay > 0 {
+			p.RegenDelay = math.Max(0, p.RegenDelay-dt)
+			continue
+		}
+		if p.Health < shooterMaxHealth {
+			p.RegenAccum += shooterRegenRate * dt
+			heal := int(p.RegenAccum)
+			if heal > 0 {
+				p.RegenAccum -= float64(heal)
+				p.Health = min(shooterMaxHealth, p.Health+heal)
+			}
 		}
 	}
 }
@@ -1498,6 +1576,13 @@ func (r *room) resolveShooterCombatLocked() {
 		if shooter == nil || !shooter.Alive || shooter.Weapon == "" {
 			continue
 		}
+		// Respect the per-weapon cooldown and ammo count.
+		if shooter.ShootCD > 0 || shooter.Ammo <= 0 {
+			continue
+		}
+		shooter.Ammo--
+		shooter.ShootCD = weaponCooldown[shooter.Weapon]
+		emptied := shooter.Ammo <= 0
 
 		direction := 1.0
 		if shooter.Facing < 0 {
@@ -1541,7 +1626,15 @@ func (r *room) resolveShooterCombatLocked() {
 
 		if target != nil {
 			shotToX = target.X
-			target.Health -= shooterDamage
+			// Armor absorbs damage first (1:1) as a buffer, the rest hits health.
+			dmg := shooterDamage
+			if target.Armor > 0 {
+				absorbed := min(target.Armor, dmg)
+				target.Armor -= absorbed
+				dmg -= absorbed
+			}
+			target.Health -= dmg
+			target.RegenDelay = shooterRegenDelay // taking damage pauses regen
 			if target.Health <= 0 {
 				target.Health = 0
 				target.Alive = false
@@ -1549,6 +1642,11 @@ func (r *room) resolveShooterCombatLocked() {
 				shooter.Score++
 				r.state.Message = fmt.Sprintf("%s выбил %s", fallbackName(shooter.Name), fallbackName(target.Name))
 			}
+		}
+
+		// Running out of ammo drops the weapon — go find another.
+		if emptied {
+			shooter.Weapon = ""
 		}
 
 		if hitX, hitY, blocked := r.findWallIntersection(shooter.X, shooter.Y, shotToX, shotToY); blocked {
