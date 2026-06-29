@@ -16,6 +16,9 @@ const (
 	shooterMaxHealth      = 100
 	shooterShotLifetime   = 0.35
 	shooterShotRange      = 220.0
+	shooterRegenRate      = 4.0  // health points regenerated per second
+	shooterRegenDelay     = 3.0  // seconds without damage before regen resumes
+	shooterMedkitHeal     = 50   // health restored by a medkit
 	catSpeed              = 180.0
 	catSize               = 36.0
 	fishSize              = 28.0
@@ -54,6 +57,19 @@ const (
 	reconnectGrace        = 10 * time.Second
 )
 
+// Per-weapon ammo capacity and shooting cooldown (seconds) for the shooter mode.
+var weaponAmmo = map[string]int{
+	"pistol": 12, "blaster": 8, "laser": 24, "plasma": 5,
+}
+var weaponCooldown = map[string]float64{
+	"pistol": 0.45, "blaster": 0.7, "laser": 0.15, "plasma": 1.1,
+}
+
+// Armor pickups: three levels granting an absorbing buffer of points.
+var armorPoints = map[string]int{
+	"armor1": 30, "armor2": 60, "armor3": 100,
+}
+
 type vector struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
@@ -89,8 +105,14 @@ type playerState struct {
 	Score      int           `json:"score"`
 	Health     int           `json:"health"`
 	Weapon     string        `json:"weapon,omitempty"`
+	Ammo       int           `json:"ammo"`
+	Armor      int           `json:"armor"`
 	Appearance catAppearance `json:"appearance"`
 	Disguise   string        `json:"disguise,omitempty"`
+	// Internal shooter timers (not serialized).
+	ShootCD    float64 `json:"-"`
+	RegenDelay float64 `json:"-"`
+	RegenAccum float64 `json:"-"`
 }
 
 type fishState struct {
@@ -207,6 +229,8 @@ type playerPatch struct {
 	Score      *int          `json:"score,omitempty"`
 	Health     *int          `json:"health,omitempty"`
 	Weapon     *string       `json:"weapon,omitempty"`
+	Ammo       *int          `json:"ammo,omitempty"`
+	Armor      *int          `json:"armor,omitempty"`
 	Appearance catAppearance `json:"appearance,omitempty"`
 	Disguise   *string       `json:"disguise,omitempty"`
 }
