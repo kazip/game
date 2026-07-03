@@ -58,7 +58,49 @@ const (
 	bombTimerBonus        = 10.0
 	dataFileName          = "data.json"
 	reconnectGrace        = 10 * time.Second
+
+	// ─── Hub / room-tree ────────────────────────────────────────────────
+	hubMode        = "hub"           // a free-roam social room, no game logic
+	hubWorldScale  = 3.0             // hub is the same size as the big modes
+	hubMaxPlayers  = 50              // soft cap on a single hub
+	defaultRoomMax = 12              // fallback capacity for a game room
+	emptyRoomGrace = 5 * time.Minute // idle non-persistent rooms are GC'd after this
 )
+
+// Game room types offered by every hub (one pooled room of each at boot).
+// These map 1:1 onto the existing play modes; "hub" is handled separately.
+var gameRoomTypes = []string{"classic", "bomb-pass", "hide-and-seek", "shooters"}
+
+// Human-readable names used to label pooled rooms ("Стрелялки №1").
+var modeDisplayNames = map[string]string{
+	"classic":       "Классика",
+	"bomb-pass":     "Горячая бомба",
+	"hide-and-seek": "Прятки",
+	"shooters":      "Стрелялки",
+	hubMode:         "Хаб",
+}
+
+// Per-type player capacity for pooled rooms.
+var roomTypeMax = map[string]int{
+	"classic":       12,
+	"bomb-pass":     16,
+	"hide-and-seek": 12,
+	"shooters":      12,
+}
+
+func displayNameForMode(mode string) string {
+	if name, ok := modeDisplayNames[mode]; ok {
+		return name
+	}
+	return mode
+}
+
+func capacityForType(roomType string) int {
+	if max, ok := roomTypeMax[roomType]; ok {
+		return max
+	}
+	return defaultRoomMax
+}
 
 // Per-weapon ammo capacity and shooting cooldown (seconds) for the shooter mode.
 var weaponAmmo = map[string]int{
@@ -215,6 +257,23 @@ type wsMessage struct {
 	Full       bool          `json:"full,omitempty"`
 	Error      string        `json:"error,omitempty"`
 	Binary     *bool         `json:"binary,omitempty"`
+	// Hub / room-tree browsing (client → server: list_rooms; server → client: rooms).
+	HubID    string           `json:"hubId,omitempty"`
+	RoomType string           `json:"roomType,omitempty"`
+	RoomID   string           `json:"roomId,omitempty"`
+	Rooms    []map[string]any `json:"rooms,omitempty"`
+	// Player report (client → server).
+	TargetID string `json:"targetId,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type reportEntry struct {
+	RoomID     string    `json:"roomId"`
+	ReporterID string    `json:"reporterId"`
+	TargetID   string    `json:"targetId"`
+	TargetName string    `json:"targetName"`
+	Reason     string    `json:"reason"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type playerPatch struct {
