@@ -345,7 +345,7 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 }
 
 func (p *statePatch) isEmpty() bool {
-	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.HidePhase == nil && p.ShootPhase == nil && p.Message == nil && p.SeekerID == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && p.PowerUps == nil && p.Walls == nil && p.Mines == nil && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil && len(p.Shots) == 0)
+	return p == nil || (p.Mode == nil && p.Phase == nil && p.Countdown == nil && p.Remaining == nil && p.HidePhase == nil && p.ShootPhase == nil && p.Message == nil && p.SeekerID == nil && p.BombHolder == nil && p.BombTimer == nil && p.WinnerID == nil && p.Status == nil && p.Fish == nil && p.PowerUp == nil && p.PowerUps == nil && p.Walls == nil && p.Mines == nil && len(p.Players) == 0 && len(p.RemovedPlayers) == 0 && p.Golden == nil && len(p.Shots) == 0 && p.Portals == nil)
 }
 
 func buildStatePatch(previous, current gameState) *statePatch {
@@ -432,6 +432,14 @@ func buildStatePatch(previous, current gameState) *statePatch {
 		}
 	}
 
+	if !portalsEqual(previous.Portals, current.Portals) {
+		if len(current.Portals) == 0 {
+			patch.Portals = []portalStatus{}
+		} else {
+			patch.Portals = append([]portalStatus(nil), current.Portals...)
+		}
+	}
+
 	prevPlayers := make(map[string]*playerState)
 	for _, p := range previous.Players {
 		prevPlayers[p.ID] = p
@@ -486,6 +494,8 @@ type room struct {
 	tickIndex          uint32
 	bombSlowTimers     map[string]float64
 	lastChatAt         map[string]time.Time
+	portalCountdown    map[string]float64 // hub only: portal type -> seconds left (0 = idle)
+	portalCooldown     map[string]float64 // hub only: portal type -> post-launch cooldown
 	lastBombPassFrom   string
 	lastBombPassTo     string
 	lastBombPassAt     time.Time
@@ -599,6 +609,8 @@ func (s *server) createRoomLocked(cfg roomConfig) *room {
 		server:           s,
 		bombSlowTimers:   make(map[string]float64),
 		lastChatAt:       make(map[string]time.Time),
+		portalCountdown:  make(map[string]float64),
+		portalCooldown:   make(map[string]float64),
 		bombPowerUpTimer: bombPowerUpInterval,
 		shootRequests:    make(map[string]bool),
 	}
@@ -1500,6 +1512,92 @@ func (r *room) updateHubLocked() {
 		p.X = clampFloat(p.X, p.Size/2, world-p.Size/2)
 		p.Y = clampFloat(p.Y, p.Size/2, world-p.Size/2)
 	}
+	r.updatePortalsLocked()
+}
+
+// updatePortalsLocked counts cats on each portal pad, runs the arm/countdown/
+// launch state machine, and publishes portal status into the hub state. Caller
+// holds r.mu (called from updateHubLocked).
+func (r *room) updatePortalsLocked() {
+	dt := tickRate.Seconds()
+	occupants := make(map[string][]string, len(hubPortals))
+	for id, p := range r.players {
+		for _, pr := range hubPortals {
+			if math.Hypot(p.X-pr.X, p.Y-pr.Y) <= portalRadius {
+				occupants[pr.Type] = append(occupants[pr.Type], id)
+				break
+			}
+		}
+	}
+
+	statuses := make([]portalStatus, 0, len(hubPortals))
+	for _, pr := range hubPortals {
+		t := pr.Type
+		occ := occupants[t]
+		if r.portalCooldown[t] > 0 {
+			r.portalCooldown[t] = math.Max(0, r.portalCooldown[t]-dt)
+		}
+		if len(occ) >= portalMinPlayers && r.portalCooldown[t] <= 0 {
+			if r.portalCountdown[t] <= 0 {
+				r.portalCountdown[t] = portalCountdownSecs
+			} else {
+				r.portalCountdown[t] -= dt
+				if r.portalCountdown[t] <= 0 {
+					r.portalCountdown[t] = 0
+					r.portalCooldown[t] = portalCooldownSecs
+					ids := append([]string(nil), occ...)
+					go r.launchPortal(t, ids)
+				}
+			}
+		} else {
+			r.portalCountdown[t] = 0 // not enough cats: disarm
+		}
+		statuses = append(statuses, portalStatus{
+			Type:      t,
+			Count:     len(occ),
+			Countdown: r.portalCountdown[t],
+			Min:       portalMinPlayers,
+		})
+	}
+	r.state.Portals = statuses
+}
+
+// launchPortal sends every cat currently on a pad into one shared game room and
+// removes them from the hub. Runs as its own goroutine so it never holds r.mu
+// while taking s.mu / another room's lock.
+func (r *room) launchPortal(roomType string, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	s := r.server
+	s.mu.Lock()
+	target := s.ensureFreePoolRoomLocked(r.id, roomType)
+	targetID := target.id
+	s.mu.Unlock()
+
+	r.mu.Lock()
+	idSet := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	conns := make([]*websocket.Conn, 0, len(ids))
+	for conn, pid := range r.connections {
+		if idSet[pid] {
+			conns = append(conns, conn)
+		}
+	}
+	for id := range idSet {
+		delete(r.players, id)
+		delete(r.inputs, id)
+		r.cancelDisconnectTimerLocked(id)
+	}
+	r.mu.Unlock()
+
+	payload, _ := json.Marshal(wsMessage{Type: "portal_launch", RoomID: targetID, RoomType: roomType})
+	for _, c := range conns {
+		c.WriteMessage(websocket.TextMessage, payload)
+	}
+	go s.notifyHubRoomsUpdated(r.id)
 }
 
 func (r *room) updatePlayersLocked() {
@@ -2302,6 +2400,11 @@ func (r *room) spawnFishLocked() {
 }
 
 func (r *room) updateLobbyMessageLocked() {
+	// Hubs are free-roam drop-in spaces: no ready gate, no lobby/countdown.
+	// Never let a ready flag flip the hub out of its "hub" phase.
+	if r.roomType == hubMode {
+		return
+	}
 	readyCount := 0
 	for _, p := range r.players {
 		if p.Ready {
@@ -2313,10 +2416,13 @@ func (r *room) updateLobbyMessageLocked() {
 		r.state.Message = "Ожидаем игроков"
 		return
 	}
-	if readyCount == total {
+	if readyCount == total && total >= minPlayersToStart {
 		r.state.Message = "Все игроки готовы"
 		r.state.Phase = "countdown"
 		r.state.Countdown = countdownDuration.Seconds()
+	} else if total < minPlayersToStart {
+		r.state.Message = "Ждём ещё котиков..."
+		r.state.Phase = "lobby"
 	} else {
 		r.state.Message = "Ожидаем готовности игроков"
 		r.state.Phase = "lobby"

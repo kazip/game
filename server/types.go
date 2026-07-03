@@ -102,6 +102,37 @@ func capacityForType(roomType string) int {
 	return defaultRoomMax
 }
 
+// ─── Hub portals (matchmaking pads) ─────────────────────────────────────────
+const (
+	portalRadius        = 100.0 // world units; must match the client HUB_PORTALS radius
+	portalMinPlayers    = 2     // cats required to arm a portal
+	portalCountdownSecs = 15.0  // countdown once armed
+	portalCooldownSecs  = 3.0   // after a launch, ignore the pad briefly
+	minPlayersToStart   = 2     // a game room won't begin a round with fewer than this
+)
+
+type hubPortal struct {
+	Type string
+	X, Y float64
+}
+
+// Positions must match the client's HUB_PORTALS (hub world = 1500, centre 750).
+var hubPortals = []hubPortal{
+	{"classic", 750, 430},
+	{"bomb-pass", 1070, 750},
+	{"hide-and-seek", 750, 1070},
+	{"shooters", 430, 750},
+}
+
+// portalStatus is broadcast in the hub's game state so clients can render the
+// live pad occupancy and countdown on each portal sign.
+type portalStatus struct {
+	Type      string  `json:"type"`
+	Count     int     `json:"count"`
+	Countdown float64 `json:"countdown"` // 0 when idle
+	Min       int     `json:"min"`
+}
+
 // Per-weapon ammo capacity and shooting cooldown (seconds) for the shooter mode.
 var weaponAmmo = map[string]int{
 	"pistol": 12, "blaster": 8, "laser": 24, "plasma": 5,
@@ -192,6 +223,7 @@ type gameState struct {
 	Status     *statusEffect  `json:"statusEffect"`
 	WinnerID   string         `json:"winnerId"`
 	Golden     bool           `json:"goldenChainActive"`
+	Portals    []portalStatus `json:"portals,omitempty"`
 	TickIndex  uint32         `json:"tickIndex"`
 	ServerTime int64          `json:"serverTime"`
 }
@@ -319,6 +351,7 @@ type statePatch struct {
 	Mines          []mine         `json:"mines,omitempty"`
 	Players        []playerPatch  `json:"players,omitempty"`
 	RemovedPlayers []string       `json:"removedPlayers,omitempty"`
+	Portals        []portalStatus `json:"portals,omitempty"`
 }
 
 type chatMessage struct {

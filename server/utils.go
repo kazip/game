@@ -118,6 +118,21 @@ func shotsEqual(a, b []shotEvent) bool {
 	return true
 }
 
+func portalsEqual(a, b []portalStatus) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Type != b[i].Type || a[i].Count != b[i].Count || a[i].Min != b[i].Min {
+			return false
+		}
+		if floatChanged(a[i].Countdown, b[i].Countdown) {
+			return false
+		}
+	}
+	return true
+}
+
 func appearanceEqual(a, b *playerState) bool {
 	if a == nil && b == nil {
 		return true
