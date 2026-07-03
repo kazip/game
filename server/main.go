@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -460,6 +461,18 @@ func buildStatePatch(previous, current gameState) *statePatch {
 }
 
 type room struct {
+	id          string    // stable unique key (== name for legacy rooms)
+	hubID       string    // "" for hubs and legacy rooms; parent hub for pooled rooms
+	roomType    string    // "hub" or a game mode; mirrors state.Mode
+	displayName string    // label shown in room/hub lists
+	maxPlayers  int       // capacity; 0 = unlimited
+	persistent  bool      // hubs and seeded rooms survive when empty
+	emptySince  time.Time // when the room last became empty (zero if occupied)
+	// Premium placeholders (stage 16) — protocol-ready, unused for now.
+	private  bool
+	password string
+	ownerID  string
+
 	name               string
 	players            map[string]*playerState
 	inputs             map[string]vector
@@ -472,6 +485,7 @@ type room struct {
 	cancel             chan struct{}
 	tickIndex          uint32
 	bombSlowTimers     map[string]float64
+	lastChatAt         map[string]time.Time
 	lastBombPassFrom   string
 	lastBombPassTo     string
 	lastBombPassAt     time.Time
@@ -483,6 +497,7 @@ type room struct {
 type server struct {
 	cats           map[string]catProfile
 	scores         []scoreEntry
+	reports        []reportEntry
 	rooms          map[string]*room
 	mu             sync.Mutex
 	upgrader       websocket.Upgrader
@@ -523,23 +538,59 @@ func normalizeMode(mode string) string {
 	}
 }
 
-func (s *server) getOrCreateRoom(name, mode string) *room {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if existing, ok := s.rooms[name]; ok {
-		return existing
+// worldSizeForMode returns the arena size for a given room type/mode.
+func worldSizeForMode(mode string) float64 {
+	switch mode {
+	case "bomb-pass":
+		return worldSize * bombWorldScale
+	case "hide-and-seek":
+		return worldSize * hideSeekWorldScale
+	case "shooters":
+		return worldSize * shooterWorldScale
+	case hubMode:
+		return worldSize * hubWorldScale
+	default:
+		return worldSize
 	}
-	normalizedMode := normalizeMode(mode)
-	world := worldSize
-	if normalizedMode == "bomb-pass" {
-		world = worldSize * bombWorldScale
-	} else if normalizedMode == "hide-and-seek" {
-		world = worldSize * hideSeekWorldScale
-	} else if normalizedMode == "shooters" {
-		world = worldSize * shooterWorldScale
+}
+
+type roomConfig struct {
+	id          string
+	hubID       string
+	roomType    string // "hub" or a game mode
+	displayName string
+	maxPlayers  int
+	persistent  bool
+}
+
+// createRoomLocked builds and starts a room. Caller must hold s.mu.
+func (s *server) createRoomLocked(cfg roomConfig) *room {
+	roomType := cfg.roomType
+	if roomType != hubMode {
+		roomType = normalizeMode(roomType)
 	}
+	world := worldSizeForMode(roomType)
+
+	name := cfg.displayName
+	if name == "" {
+		name = cfg.id
+	}
+	phase := "lobby"
+	message := "Ожидаем игроков"
+	if roomType == hubMode {
+		phase = hubMode
+		message = ""
+	}
+
 	r := &room{
-		name:             name,
+		id:               cfg.id,
+		hubID:            cfg.hubID,
+		roomType:         roomType,
+		displayName:      name,
+		maxPlayers:       cfg.maxPlayers,
+		persistent:       cfg.persistent,
+		emptySince:       time.Now(),
+		name:             cfg.id,
 		players:          make(map[string]*playerState),
 		inputs:           make(map[string]vector),
 		connections:      make(map[*websocket.Conn]string),
@@ -547,25 +598,129 @@ func (s *server) getOrCreateRoom(name, mode string) *room {
 		cancel:           make(chan struct{}),
 		server:           s,
 		bombSlowTimers:   make(map[string]float64),
+		lastChatAt:       make(map[string]time.Time),
 		bombPowerUpTimer: bombPowerUpInterval,
 		shootRequests:    make(map[string]bool),
 	}
 	r.state = gameState{
 		RoomName:   name,
-		Mode:       normalizedMode,
-		Phase:      "lobby",
+		Mode:       roomType,
+		Phase:      phase,
 		Fish:       fishState{X: world / 2, Y: world / 2, Size: fishSize, Alive: false, Type: "normal", Direction: 1},
 		PowerUp:    powerUpState{Size: powerUpSize},
 		PowerUps:   nil,
 		Remaining:  roundDuration.Seconds(),
 		HidePhase:  "",
 		ShootPhase: "",
-		Message:    "Ожидаем игроков",
+		Message:    message,
 		ServerTime: time.Now().UnixMilli(),
 	}
-	s.rooms[name] = r
+	s.rooms[cfg.id] = r
 	go r.run()
 	return r
+}
+
+// getOrCreateRoom is the LEGACY ad-hoc path (arbitrary room name from the client).
+// Kept for the web client and future premium player-created rooms; the hub flow
+// uses seeded rooms + joinByID instead.
+func (s *server) getOrCreateRoom(name, mode string) *room {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.rooms[name]; ok {
+		return existing
+	}
+	return s.createRoomLocked(roomConfig{
+		id:         name,
+		roomType:   normalizeMode(mode),
+		maxPlayers: 0, // legacy rooms are uncapped
+		persistent: false,
+	})
+}
+
+// ─── World seeding (hubs + room pools) ──────────────────────────────────────
+
+func (s *server) seedWorld() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hubs := []struct{ id, name string }{
+		{"hub-central", "Центральный хаб"},
+		{"hub-garden", "Садовый хаб"},
+	}
+	for _, h := range hubs {
+		s.createRoomLocked(roomConfig{
+			id:          h.id,
+			roomType:    hubMode,
+			displayName: h.name,
+			maxPlayers:  hubMaxPlayers,
+			persistent:  true,
+		})
+		for _, t := range gameRoomTypes {
+			s.createPoolRoomLocked(h.id, t, 1)
+		}
+	}
+}
+
+func poolRoomID(hubID, roomType string, index int) string {
+	return fmt.Sprintf("%s:%s:%d", hubID, roomType, index)
+}
+
+// createPoolRoomLocked adds one pooled game room to a hub. Caller holds s.mu.
+func (s *server) createPoolRoomLocked(hubID, roomType string, index int) *room {
+	return s.createRoomLocked(roomConfig{
+		id:          poolRoomID(hubID, roomType, index),
+		hubID:       hubID,
+		roomType:    roomType,
+		displayName: fmt.Sprintf("%s №%d", displayNameForMode(roomType), index),
+		maxPlayers:  capacityForType(roomType),
+		persistent:  false,
+	})
+}
+
+// poolRoomsLocked returns the pooled rooms of a hub for a given type. Caller holds s.mu.
+func (s *server) poolRoomsLocked(hubID, roomType string) []*room {
+	out := make([]*room, 0, 4)
+	for _, r := range s.rooms {
+		if r.hubID == hubID && r.roomType == roomType {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].id < out[j].id })
+	return out
+}
+
+// ensureFreePoolRoomLocked guarantees at least one non-full pooled room exists for
+// hub+type, creating "Type №n+1" if every current room is full. Caller holds s.mu.
+func (s *server) ensureFreePoolRoomLocked(hubID, roomType string) *room {
+	pool := s.poolRoomsLocked(hubID, roomType)
+	maxIndex := 0
+	for _, r := range pool {
+		if idx := poolIndexOf(r.id); idx > maxIndex {
+			maxIndex = idx
+		}
+		if !r.isFullLocked() {
+			return r
+		}
+	}
+	return s.createPoolRoomLocked(hubID, roomType, maxIndex+1)
+}
+
+func poolIndexOf(id string) int {
+	parts := strings.Split(id, ":")
+	if len(parts) == 0 {
+		return 0
+	}
+	n, _ := strconv.Atoi(parts[len(parts)-1])
+	return n
+}
+
+// isFullLocked reports whether the room is at capacity. Caller holds r.mu OR s.mu
+// while the room is otherwise quiescent; used for pool selection where a small race
+// is acceptable (capacity is re-checked on actual join).
+func (r *room) isFullLocked() bool {
+	if r.maxPlayers <= 0 {
+		return false
+	}
+	return len(r.players) >= r.maxPlayers
 }
 
 func (s *server) removeConnection(conn *websocket.Conn) {
@@ -608,6 +763,19 @@ func (s *server) addScore(entry scoreEntry) {
 	s.persistLocked()
 }
 
+func (s *server) addReport(entry reportEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry.CreatedAt = time.Now()
+	s.reports = append(s.reports, entry)
+	if len(s.reports) > 500 {
+		s.reports = s.reports[len(s.reports)-500:]
+	}
+	s.persistLocked()
+	log.Printf("REPORT room=%s reporter=%s target=%s(%s) reason=%q",
+		entry.RoomID, entry.ReporterID, entry.TargetID, entry.TargetName, entry.Reason)
+}
+
 func (s *server) loadFromDisk() {
 	data, err := os.ReadFile(dataFileName)
 	if err != nil {
@@ -618,8 +786,9 @@ func (s *server) loadFromDisk() {
 	}
 
 	var payload struct {
-		Cats   map[string]catProfile `json:"cats"`
-		Scores []scoreEntry          `json:"scores"`
+		Cats    map[string]catProfile `json:"cats"`
+		Scores  []scoreEntry          `json:"scores"`
+		Reports []reportEntry         `json:"reports"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		log.Printf("failed to decode data file: %v", err)
@@ -632,15 +801,20 @@ func (s *server) loadFromDisk() {
 	if payload.Scores != nil {
 		s.scores = payload.Scores
 	}
+	if payload.Reports != nil {
+		s.reports = payload.Reports
+	}
 }
 
 func (s *server) persistLocked() {
 	payload := struct {
-		Cats   map[string]catProfile `json:"cats"`
-		Scores []scoreEntry          `json:"scores"`
+		Cats    map[string]catProfile `json:"cats"`
+		Scores  []scoreEntry          `json:"scores"`
+		Reports []reportEntry         `json:"reports"`
 	}{
-		Cats:   s.cats,
-		Scores: s.scores,
+		Cats:    s.cats,
+		Scores:  s.scores,
+		Reports: s.reports,
 	}
 
 	data, err := json.MarshalIndent(payload, "", "  ")
@@ -665,20 +839,81 @@ func (s *server) topScores(limit int) []scoreEntry {
 	return out
 }
 
-func (s *server) listRooms() []map[string]any {
+// roomSummaryLocked builds the browse-list entry for a room. Caller holds s.mu.
+func roomSummaryLocked(r *room) map[string]any {
+	return map[string]any{
+		"id":          r.id,
+		"name":        r.displayName,
+		"roomName":    r.name, // legacy field (web client)
+		"hubId":       r.hubID,
+		"type":        r.roomType,
+		"mode":        r.state.Mode, // legacy field
+		"phase":       r.state.Phase,
+		"players":     len(r.players),
+		"playerCount": len(r.players), // legacy field
+		"max":         r.maxPlayers,
+		"persistent":  r.persistent,
+		"updatedAt":   time.Now().UnixMilli(),
+	}
+}
+
+// listRooms returns summaries of rooms, optionally filtered by hub and/or type.
+// Hubs themselves are excluded from the room list. Empty filters match everything.
+func (s *server) listRooms(hubID, roomType string) []map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Ensure a joinable room exists for a specific hub+type query (autopool).
+	if hubID != "" && roomType != "" && roomType != hubMode {
+		s.ensureFreePoolRoomLocked(hubID, roomType)
+	}
+	return s.listRoomsLocked(hubID, roomType)
+}
+
+// listRoomsLocked is the read-only body of listRooms. Caller holds s.mu.
+func (s *server) listRoomsLocked(hubID, roomType string) []map[string]any {
 	rooms := make([]map[string]any, 0, len(s.rooms))
 	for _, r := range s.rooms {
-		rooms = append(rooms, map[string]any{
-			"roomName":    r.name,
-			"mode":        r.state.Mode,
-			"phase":       r.state.Phase,
-			"playerCount": len(r.players),
-			"updatedAt":   time.Now().UnixMilli(),
+		if r.roomType == hubMode {
+			continue
+		}
+		if hubID != "" && r.hubID != hubID {
+			continue
+		}
+		if roomType != "" && r.roomType != roomType {
+			continue
+		}
+		rooms = append(rooms, roomSummaryLocked(r))
+	}
+	sort.Slice(rooms, func(i, j int) bool {
+		return rooms[i]["id"].(string) < rooms[j]["id"].(string)
+	})
+	return rooms
+}
+
+// listHubs returns summaries of all hubs, most populated first.
+func (s *server) listHubs() []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hubs := make([]map[string]any, 0, 4)
+	for _, r := range s.rooms {
+		if r.roomType != hubMode {
+			continue
+		}
+		hubs = append(hubs, map[string]any{
+			"id":      r.id,
+			"name":    r.displayName,
+			"players": len(r.players),
+			"max":     r.maxPlayers,
 		})
 	}
-	return rooms
+	sort.Slice(hubs, func(i, j int) bool {
+		pi, pj := hubs[i]["players"].(int), hubs[j]["players"].(int)
+		if pi != pj {
+			return pi > pj // busiest first
+		}
+		return hubs[i]["id"].(string) < hubs[j]["id"].(string)
+	})
+	return hubs
 }
 
 func (s *server) handleCats(w http.ResponseWriter, r *http.Request) {
@@ -731,16 +966,32 @@ func (s *server) handleScores(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleRooms(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]any{"rooms": s.listRooms()})
+	hubID := r.URL.Query().Get("hub")
+	roomType := r.URL.Query().Get("type")
+	writeJSON(w, map[string]any{"rooms": s.listRooms(hubID, roomType)})
+}
+
+func (s *server) handleHubs(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"hubs": s.listHubs()})
+}
+
+// handleReports exposes collected player reports for manual moderation review.
+func (s *server) handleReports(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	out := make([]reportEntry, len(s.reports))
+	copy(out, s.reports)
+	s.mu.Unlock()
+	writeJSON(w, map[string]any{"reports": out})
 }
 
 func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
+	roomID := r.URL.Query().Get("roomId")
 	roomName := r.URL.Query().Get("room")
 	playerID := r.URL.Query().Get("playerId")
 	playerName := r.URL.Query().Get("name")
 	mode := r.URL.Query().Get("mode")
-	if roomName == "" || playerID == "" {
-		http.Error(w, "room and playerId required", http.StatusBadRequest)
+	if playerID == "" || (roomID == "" && roomName == "") {
+		http.Error(w, "roomId (or room) and playerId required", http.StatusBadRequest)
 		return
 	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
@@ -748,6 +999,27 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("upgrade error: %v", err)
 		return
 	}
+
+	// New hub flow: join a specific pre-seeded room by id (no ad-hoc creation).
+	if roomID != "" {
+		s.mu.Lock()
+		rInstance, ok := s.rooms[roomID]
+		s.mu.Unlock()
+		if !ok {
+			conn.WriteJSON(wsMessage{Type: "error", Error: "Комната не найдена."})
+			conn.Close()
+			return
+		}
+		if !rInstance.canJoin(playerID) {
+			conn.WriteJSON(wsMessage{Type: "error", Error: "Комната заполнена."})
+			conn.Close()
+			return
+		}
+		rInstance.handleConnection(conn, playerID, playerName)
+		return
+	}
+
+	// Legacy flow: ad-hoc room by name + mode (web client / premium later).
 	normalizedMode := normalizeMode(mode)
 	rInstance := s.getOrCreateRoom(roomName, normalizedMode)
 	if rInstance.state.Mode != normalizedMode {
@@ -758,12 +1030,32 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	rInstance.handleConnection(conn, playerID, playerName)
 }
 
+// canJoin reports whether playerID may join now (already-present players and
+// uncapped rooms always may; otherwise capacity applies).
+func (r *room) canJoin(playerID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, present := r.players[playerID]; present {
+		return true
+	}
+	if r.maxPlayers <= 0 {
+		return true
+	}
+	return len(r.players) < r.maxPlayers
+}
+
 func (r *room) handleConnection(conn *websocket.Conn, playerID, playerName string) {
 	r.mu.Lock()
 	r.connections[conn] = playerID
 	_ = r.ensurePlayer(playerID, playerName)
 	r.cancelDisconnectTimerLocked(playerID)
+	r.emptySince = time.Time{} // occupied
 	r.mu.Unlock()
+
+	// Update portal signs in the parent hub when a pooled game room fills up.
+	if r.hubID != "" {
+		go r.server.notifyHubRoomsUpdated(r.hubID)
+	}
 
 	r.sendProtocolInfo(conn)
 	r.sendFullState(conn)
@@ -824,7 +1116,34 @@ func (r *room) handleClientMessage(playerID string, msg wsMessage) {
 		if msg.Appearance != nil {
 			r.updateAppearance(playerID, msg.Appearance)
 		}
+	case "list_rooms":
+		r.handleListRooms(playerID, msg.HubID, msg.RoomType)
+	case "report":
+		r.handleReport(playerID, msg.TargetID, msg.Reason)
 	}
+}
+
+func (r *room) handleReport(reporterID, targetID, reason string) {
+	if targetID == "" || targetID == reporterID {
+		return
+	}
+	r.mu.Lock()
+	targetName := ""
+	if p, ok := r.players[targetID]; ok {
+		targetName = p.Name
+	}
+	roomID := r.id
+	r.mu.Unlock()
+	if len(reason) > 200 {
+		reason = reason[:200]
+	}
+	r.server.addReport(reportEntry{
+		RoomID:     roomID,
+		ReporterID: reporterID,
+		TargetID:   targetID,
+		TargetName: targetName,
+		Reason:     reason,
+	})
 }
 
 func (r *room) setReady(playerID string, ready bool) {
@@ -878,8 +1197,14 @@ func (r *room) schedulePlayerRemovalLocked(playerID string) {
 		delete(r.inputs, playerID)
 		delete(r.players, playerID)
 		if len(r.players) == 0 {
-			r.state.Phase = "lobby"
-			r.state.Message = "Ожидаем игроков"
+			r.emptySince = time.Now()
+			if r.roomType != hubMode {
+				r.state.Phase = "lobby"
+				r.state.Message = "Ожидаем игроков"
+			}
+		}
+		if r.hubID != "" {
+			go r.server.notifyHubRoomsUpdated(r.hubID)
 		}
 	})
 
@@ -950,6 +1275,13 @@ func (r *room) step() {
 	r.state.ServerTime = now.UnixMilli()
 	r.state.TickIndex = r.tickIndex
 	r.tickIndex++
+
+	// Hubs are free-roam social spaces: just move cats, no rounds/rules.
+	if r.roomType == hubMode {
+		r.updateHubLocked()
+		return
+	}
+
 	switch r.state.Phase {
 	case "countdown":
 		r.state.Countdown -= tickRate.Seconds()
@@ -1145,6 +1477,31 @@ func (r *room) bestPlayerIDLocked() string {
 	return best.ID
 }
 
+// updateHubLocked moves cats around a hub with no game mechanics (no walls,
+// mines, fish, combat). Every cat is always "alive" so it renders.
+func (r *room) updateHubLocked() {
+	world := r.currentWorldSize()
+	for id, p := range r.players {
+		p.Alive = true
+		input := r.inputs[id]
+		speed := catSpeed * tickRate.Seconds()
+		p.X += input.X * speed
+		p.Y += input.Y * speed
+		p.Moving = math.Abs(input.X) > 0.01 || math.Abs(input.Y) > 0.01
+		if input.X > 0.01 {
+			p.Facing = 1
+		} else if input.X < -0.01 {
+			p.Facing = -1
+		}
+		if p.Moving {
+			p.StepAccum += tickRate.Seconds() * 4
+			p.WalkCycle = math.Mod(p.StepAccum, 1)
+		}
+		p.X = clampFloat(p.X, p.Size/2, world-p.Size/2)
+		p.Y = clampFloat(p.Y, p.Size/2, world-p.Size/2)
+	}
+}
+
 func (r *room) updatePlayersLocked() {
 	world := r.currentWorldSize()
 	for id, p := range r.players {
@@ -1153,6 +1510,10 @@ func (r *room) updatePlayersLocked() {
 		}
 		speedMultiplier := r.getSpeedMultiplierLocked(p.ID)
 		input := r.inputs[id]
+		// The seeker is blindfolded and frozen during the hiding phase.
+		if r.isHideSeekMode() && r.state.HidePhase == "hiding" && id == r.state.SeekerID {
+			input = vector{}
+		}
 		speed := catSpeed * tickRate.Seconds() * speedMultiplier
 		if r.isBombMode() {
 			speed *= r.getBombSpeedMultiplierLocked(id)
@@ -1237,6 +1598,9 @@ func (r *room) isShooterMode() bool {
 }
 
 func (r *room) currentWorldSize() float64 {
+	if r.roomType == hubMode {
+		return worldSize * hubWorldScale
+	}
 	if r.isBombMode() {
 		return worldSize * bombWorldScale
 	}
@@ -2020,16 +2384,145 @@ func (r *room) sendProtocolInfo(conn *websocket.Conn) {
 	conn.WriteMessage(websocket.TextMessage, data)
 }
 
+// sendToPlayer writes a raw JSON message to every connection of one player.
+func (r *room) sendToPlayer(playerID string, data []byte) {
+	r.mu.Lock()
+	conns := make([]*websocket.Conn, 0, 1)
+	for c, id := range r.connections {
+		if id == playerID {
+			conns = append(conns, c)
+		}
+	}
+	r.mu.Unlock()
+	for _, c := range conns {
+		c.WriteMessage(websocket.TextMessage, data)
+	}
+}
+
+// handleListRooms answers a client's list_rooms request with the pool of rooms
+// for the requested hub+type (defaulting the hub to the one the player is in).
+func (r *room) handleListRooms(playerID, hubID, roomType string) {
+	if hubID == "" {
+		if r.roomType == hubMode {
+			hubID = r.id
+		} else {
+			hubID = r.hubID
+		}
+	}
+	rooms := r.server.listRooms(hubID, roomType)
+	payload, _ := json.Marshal(wsMessage{Type: "rooms", HubID: hubID, RoomType: roomType, Rooms: rooms})
+	r.sendToPlayer(playerID, payload)
+}
+
+// notifyHubRoomsUpdated pushes the current room pool of a hub to everyone standing
+// in that hub, so portal signs update live. Safe to call from any goroutine.
+func (s *server) notifyHubRoomsUpdated(hubID string) {
+	s.mu.Lock()
+	hub, ok := s.rooms[hubID]
+	if !ok {
+		s.mu.Unlock()
+		return
+	}
+	rooms := s.listRoomsLocked(hubID, "")
+	hub.mu.Lock()
+	conns := make([]*websocket.Conn, 0, len(hub.connections))
+	for c := range hub.connections {
+		conns = append(conns, c)
+	}
+	hub.mu.Unlock()
+	s.mu.Unlock()
+
+	payload, _ := json.Marshal(wsMessage{Type: "rooms_updated", HubID: hubID, Rooms: rooms})
+	for _, c := range conns {
+		c.WriteMessage(websocket.TextMessage, payload)
+	}
+}
+
+const (
+	chatMaxLen      = 200
+	chatMinInterval = 700 * time.Millisecond
+)
+
+// A small starter blacklist (lowercase). Extend as needed; matched anywhere in
+// the text and masked with asterisks.
+var chatBadWords = []string{
+	"хуй", "пизд", "ебан", "еблан", "бляд", "сука", "мудак", "гандон",
+	"fuck", "shit", "bitch", "asshole",
+}
+
+// sanitizeChatText trims, strips control chars, caps length and masks profanity.
+func sanitizeChatText(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		if r < 0x20 {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	runes := []rune(s)
+	if len(runes) > chatMaxLen {
+		s = string(runes[:chatMaxLen])
+	}
+	return strings.TrimSpace(maskProfanity(s))
+}
+
+// maskProfanity replaces blacklisted substrings with one asterisk per rune.
+// It works on rune slices so Cyrillic (multibyte) words mask correctly and the
+// src/low slices stay index-aligned across overlapping matches.
+func maskProfanity(s string) string {
+	src := []rune(s)
+	low := []rune(strings.ToLower(s))
+	for _, w := range chatBadWords {
+		wr := []rune(w)
+		n := len(wr)
+		if n == 0 {
+			continue
+		}
+		for i := 0; i+n <= len(low); i++ {
+			match := true
+			for j := 0; j < n; j++ {
+				if low[i+j] != wr[j] {
+					match = false
+					break
+				}
+			}
+			if match {
+				for j := 0; j < n; j++ {
+					src[i+j] = '*'
+					low[i+j] = '*'
+				}
+				i += n - 1
+			}
+		}
+	}
+	return string(src)
+}
+
 func (r *room) broadcastChat(senderID string, msg chatMessage) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	now := time.Now()
+	if last, ok := r.lastChatAt[senderID]; ok && now.Sub(last) < chatMinInterval {
+		return // rate-limited: drop silently
+	}
+
+	text := sanitizeChatText(msg.Text)
+	if text == "" {
+		return
+	}
+	r.lastChatAt[senderID] = now
+	msg.Text = text
 
 	if player, ok := r.players[senderID]; ok {
 		msg.PlayerID = senderID
 		msg.Name = player.Name
 	}
 
-	msg.At = time.Now().UnixMilli()
+	msg.At = now.UnixMilli()
 	data, _ := json.Marshal(wsMessage{Type: "chat", Message: &msg})
 	for conn, playerID := range r.connections {
 		if playerID == senderID {
@@ -2657,12 +3150,69 @@ func entityIntersectsWalls(entity *playerState, walls []wall) bool {
 	return false
 }
 
+// roomJanitor periodically removes empty, non-persistent rooms.
+func (s *server) roomJanitor() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.sweepEmptyRooms()
+	}
+}
+
+// sweepEmptyRooms deletes non-hub, non-persistent rooms that have sat empty past
+// the grace period, always leaving at least one pooled room per hub+type so the
+// portal signs never go blank. Hubs and occupied rooms are never touched.
+func (s *server) sweepEmptyRooms() {
+	now := time.Now()
+	s.mu.Lock()
+	type poolKey struct{ hub, typ string }
+	counts := map[poolKey]int{}
+	for _, r := range s.rooms {
+		if r.hubID != "" {
+			counts[poolKey{r.hubID, r.roomType}]++
+		}
+	}
+	var doomed []*room
+	for id, r := range s.rooms {
+		if r.persistent || r.roomType == hubMode {
+			continue
+		}
+		if len(r.players) > 0 || len(r.connections) > 0 {
+			continue
+		}
+		if r.emptySince.IsZero() {
+			r.emptySince = now
+			continue
+		}
+		if now.Sub(r.emptySince) < emptyRoomGrace {
+			continue
+		}
+		if r.hubID != "" && counts[poolKey{r.hubID, r.roomType}] <= 1 {
+			continue // keep the last pooled room of this type
+		}
+		doomed = append(doomed, r)
+		if r.hubID != "" {
+			counts[poolKey{r.hubID, r.roomType}]--
+		}
+		delete(s.rooms, id)
+	}
+	s.mu.Unlock()
+
+	for _, r := range doomed {
+		close(r.cancel) // stop the room's goroutine
+	}
+}
+
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	srv := newServer()
+	srv.seedWorld()
+	go srv.roomJanitor()
 
 	http.Handle("/api/cats/{id}", withCORS(http.HandlerFunc(srv.handleCats)))
 	http.Handle("/api/scores", withCORS(http.HandlerFunc(srv.handleScores)))
+	http.Handle("/api/hubs", withCORS(http.HandlerFunc(srv.handleHubs)))
+	http.Handle("/api/reports", withCORS(http.HandlerFunc(srv.handleReports)))
 	http.Handle("/api/rooms", withCORS(http.HandlerFunc(srv.handleRooms)))
 	http.Handle("/ws", withCORS(http.HandlerFunc(srv.handleWS))) // можно и без CORS, но не помешает
 
