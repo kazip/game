@@ -499,6 +499,7 @@ type room struct {
 	lastChatAt         map[string]time.Time
 	portalCountdown    map[string]float64 // hub only: portal type -> seconds left (0 = idle)
 	portalCooldown     map[string]float64 // hub only: portal type -> post-launch cooldown
+	leaderCounts       map[string]int     // round-robin fairness: times each player was the round "it"
 	lastBombPassFrom   string
 	lastBombPassTo     string
 	lastBombPassAt     time.Time
@@ -618,6 +619,7 @@ func (s *server) createRoomLocked(cfg roomConfig) *room {
 		lastChatAt:       make(map[string]time.Time),
 		portalCountdown:  make(map[string]float64),
 		portalCooldown:   make(map[string]float64),
+		leaderCounts:     make(map[string]int),
 		bombPowerUpTimer: bombPowerUpInterval,
 		shootRequests:    make(map[string]bool),
 	}
@@ -1215,6 +1217,7 @@ func (r *room) schedulePlayerRemovalLocked(playerID string) {
 		delete(r.disconnectTimers, playerID)
 		delete(r.inputs, playerID)
 		delete(r.players, playerID)
+		delete(r.leaderCounts, playerID)
 		if len(r.players) == 0 {
 			r.emptySince = time.Now()
 			if r.roomType != hubMode {
@@ -1395,6 +1398,12 @@ func (r *room) beginRoundLocked() {
 	r.bombSlowTimers = make(map[string]float64)
 	r.shootRequests = make(map[string]bool)
 	r.resetBombPassHistoryLocked()
+	// Revive everyone BEFORE any mode picks its random "it": otherwise the pool
+	// is only whoever survived the last round (e.g. the hide-and-seek seeker,
+	// who never dies), and that player gets re-picked as leader every time.
+	for _, p := range r.players {
+		p.Alive = true
+	}
 	if r.isBombMode() {
 		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
 		r.state.PowerUp.Active = false
@@ -1421,7 +1430,7 @@ func (r *room) beginRoundLocked() {
 		r.state.Mines = nil
 		r.state.Remaining = hideSeekHideDuration
 		r.state.HidePhase = "hiding"
-		r.state.SeekerID = r.pickRandomSeekerLocked()
+		r.state.SeekerID = r.pickLeaderLocked()
 		seekerName := "случайный котик"
 		if seeker, ok := r.players[r.state.SeekerID]; ok && seeker != nil {
 			seekerName = fallbackName(seeker.Name)
@@ -1455,11 +1464,11 @@ func (r *room) beginRoundLocked() {
 	r.state.BombHolder = ""
 	r.state.BombTimer = bombTimerDuration
 	if r.isBombMode() {
-		r.assignBombToRandomAliveLocked(true)
+		r.assignBombLocked(r.pickLeaderLocked(), true) // round-robin first holder
 	}
 	if r.isZombieMode() {
-		zid := r.pickRandomSeekerLocked() // reuse the random-alive picker
-		r.state.SeekerID = zid            // patient zero (for reference/highlight)
+		zid := r.pickLeaderLocked() // round-robin patient zero
+		r.state.SeekerID = zid      // patient zero (for reference/highlight)
 		zname := "случайный котик"
 		if z, ok := r.players[zid]; ok && z != nil {
 			z.Zombie = true
@@ -1882,14 +1891,25 @@ func (r *room) assignBombToRandomAliveLocked(resetTimer bool) {
 		r.state.BombHolder = ""
 		return
 	}
+	r.assignBombLocked(alive[rand.Intn(len(alive))].ID, resetTimer)
+}
+
+// assignBombLocked gives the bomb to a specific player (used for the round-robin
+// round-start holder as well as random mid-round reassignments).
+func (r *room) assignBombLocked(id string, resetTimer bool) {
+	if id == "" {
+		r.state.BombHolder = ""
+		return
+	}
 	r.resetBombPassHistoryLocked()
-	picked := alive[rand.Intn(len(alive))]
-	r.state.BombHolder = picked.ID
+	r.state.BombHolder = id
 	if resetTimer {
 		r.state.BombTimer = bombTimerDuration
 	}
-	r.applyBombSlowdownLocked(picked.ID)
-	r.state.Message = fmt.Sprintf("Бомба у %s!", fallbackName(picked.Name))
+	r.applyBombSlowdownLocked(id)
+	if p, ok := r.players[id]; ok {
+		r.state.Message = fmt.Sprintf("Бомба у %s!", fallbackName(p.Name))
+	}
 }
 
 func (r *room) handleBombTransferLocked() {
@@ -1971,6 +1991,31 @@ func (r *room) allZombiesLocked() bool {
 		}
 	}
 	return true
+}
+
+// pickLeaderLocked chooses the round's "it" (seeker / zombie zero / first bomb
+// holder) round-robin: whoever has been leader the fewest times, ties broken
+// randomly. This guarantees everyone takes a turn before anyone repeats, and is
+// robust to players joining/leaving (a fresh player has count 0 → picked soon).
+func (r *room) pickLeaderLocked() string {
+	if len(r.players) == 0 {
+		return ""
+	}
+	minCount := math.MaxInt
+	for id := range r.players {
+		if c := r.leaderCounts[id]; c < minCount {
+			minCount = c
+		}
+	}
+	candidates := make([]string, 0, len(r.players))
+	for id := range r.players {
+		if r.leaderCounts[id] == minCount {
+			candidates = append(candidates, id)
+		}
+	}
+	picked := candidates[rand.Intn(len(candidates))]
+	r.leaderCounts[picked]++
+	return picked
 }
 
 func (r *room) pickRandomSeekerLocked() string {
