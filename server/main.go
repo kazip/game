@@ -1443,7 +1443,8 @@ func (r *room) beginRoundLocked() {
 		r.state.PowerUps = nil
 		r.state.Mines = nil
 		r.state.Remaining = zombieRoundSecs
-		r.scatterPlayersLocked() // spread cats out so nobody starts tagged
+		r.scatterPlayersLocked()      // spread cats out so nobody starts tagged
+		r.buildArenaWithWallsLocked() // maze to run through and break line of tag
 	} else {
 		r.spawnFishLocked()
 	}
@@ -1790,21 +1791,21 @@ func (r *room) currentWorldSize() float64 {
 }
 
 func (r *room) wallThicknessRate() float64 {
-	if r.isBombMode() || r.isHideSeekMode() || r.isShooterMode() {
+	if r.isBombMode() || r.isHideSeekMode() || r.isShooterMode() || r.isZombieMode() {
 		return bombWallThicknessRate
 	}
 	return wallThicknessRate
 }
 
 func (r *room) maxWallTotalLen() int {
-	if r.isBombMode() || r.isHideSeekMode() || r.isShooterMode() {
+	if r.isBombMode() || r.isHideSeekMode() || r.isShooterMode() || r.isZombieMode() {
 		return bombMaxWallTotalLen
 	}
 	return maxWallTotalLen
 }
 
 func (r *room) maxSegments() int {
-	if r.isBombMode() || r.isHideSeekMode() || r.isShooterMode() {
+	if r.isBombMode() || r.isHideSeekMode() || r.isShooterMode() || r.isZombieMode() {
 		return bombMaxSegments
 	}
 	return maxSegments
