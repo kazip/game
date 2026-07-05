@@ -69,7 +69,7 @@ const (
 
 // Game room types offered by every hub (one pooled room of each at boot).
 // These map 1:1 onto the existing play modes; "hub" is handled separately.
-var gameRoomTypes = []string{"classic", "bomb-pass", "hide-and-seek", "shooters"}
+var gameRoomTypes = []string{"classic", "bomb-pass", "hide-and-seek", "shooters", "zombies"}
 
 // Human-readable names used to label pooled rooms ("Стрелялки №1").
 var modeDisplayNames = map[string]string{
@@ -77,6 +77,7 @@ var modeDisplayNames = map[string]string{
 	"bomb-pass":     "Горячая бомба",
 	"hide-and-seek": "Прятки",
 	"shooters":      "Стрелялки",
+	"zombies":       "Зомби",
 	hubMode:         "Хаб",
 }
 
@@ -86,6 +87,7 @@ var roomTypeMax = map[string]int{
 	"bomb-pass":     16,
 	"hide-and-seek": 12,
 	"shooters":      12,
+	"zombies":       12,
 }
 
 func displayNameForMode(mode string) string {
@@ -111,17 +113,27 @@ const (
 	minPlayersToStart   = 2     // a game room won't begin a round with fewer than this
 )
 
+// ─── Zombie mode ────────────────────────────────────────────────────────────
+const (
+	zombieWorldScale = 3.0  // arena size (== hide-and-seek)
+	zombieRoundSecs  = 60.0 // one minute to infect everyone
+	zombieTouchDist  = 44.0 // world units for a tag
+	zombieSpeedBoost = 1.12 // zombies chase slightly faster
+)
+
 type hubPortal struct {
 	Type string
 	X, Y float64
 }
 
 // Positions must match the client's HUB_PORTALS (hub world = 1500, centre 750).
+// Pentagon around the centre (radius 330).
 var hubPortals = []hubPortal{
-	{"classic", 750, 430},
-	{"bomb-pass", 1070, 750},
-	{"hide-and-seek", 750, 1070},
-	{"shooters", 430, 750},
+	{"classic", 750, 420},
+	{"shooters", 1064, 648},
+	{"bomb-pass", 944, 1017},
+	{"hide-and-seek", 556, 1017},
+	{"zombies", 436, 648},
 }
 
 // portalStatus is broadcast in the hub's game state so clients can render the
@@ -185,6 +197,7 @@ type playerState struct {
 	Armor      int           `json:"armor"`
 	Appearance catAppearance `json:"appearance"`
 	Disguise   string        `json:"disguise,omitempty"`
+	Zombie     bool          `json:"zombie,omitempty"`
 	// Internal shooter timers (not serialized).
 	ShootCD    float64 `json:"-"`
 	RegenDelay float64 `json:"-"`
@@ -327,6 +340,7 @@ type playerPatch struct {
 	Armor      *int          `json:"armor,omitempty"`
 	Appearance catAppearance `json:"appearance,omitempty"`
 	Disguise   *string       `json:"disguise,omitempty"`
+	Zombie     *bool         `json:"zombie,omitempty"`
 }
 
 type statePatch struct {

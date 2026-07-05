@@ -278,7 +278,7 @@ func (r *room) snapshotLocked() gameState {
 }
 
 func (p playerPatch) isEmpty() bool {
-	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && p.Health == nil && p.Weapon == nil && p.Ammo == nil && p.Armor == nil && len(p.Appearance) == 0 && p.Disguise == nil
+	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && p.Health == nil && p.Weapon == nil && p.Ammo == nil && p.Armor == nil && len(p.Appearance) == 0 && p.Disguise == nil && p.Zombie == nil
 }
 
 func buildPlayerPatch(previous, current *playerState) *playerPatch {
@@ -337,6 +337,9 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 	if previous == nil || previous.Disguise != current.Disguise {
 		disguise := current.Disguise
 		patch.Disguise = &disguise
+	}
+	if previous == nil || previous.Zombie != current.Zombie {
+		patch.Zombie = boolPtr(current.Zombie)
 	}
 	if patch.isEmpty() {
 		return nil
@@ -543,6 +546,8 @@ func normalizeMode(mode string) string {
 		return mode
 	case "shooters":
 		return mode
+	case "zombies":
+		return mode
 	default:
 		return "classic"
 	}
@@ -557,6 +562,8 @@ func worldSizeForMode(mode string) float64 {
 		return worldSize * hideSeekWorldScale
 	case "shooters":
 		return worldSize * shooterWorldScale
+	case "zombies":
+		return worldSize * zombieWorldScale
 	case hubMode:
 		return worldSize * hubWorldScale
 	default:
@@ -1341,6 +1348,18 @@ func (r *room) step() {
 					return
 				}
 			}
+		} else if r.isZombieMode() {
+			r.state.Remaining -= tickRate.Seconds()
+			r.updatePlayersLocked()
+			r.handleZombieInfectionsLocked()
+			if r.allZombiesLocked() {
+				r.endRoundLocked("Зомби победили — заражены все!")
+				return
+			}
+			if r.state.Remaining <= 0 {
+				r.endRoundLocked("Выжившие продержались минуту!")
+				return
+			}
 		} else {
 			r.state.Remaining -= tickRate.Seconds()
 			r.updatePowerUpLocked()
@@ -1409,11 +1428,19 @@ func (r *room) beginRoundLocked() {
 		}
 		r.state.Message = fmt.Sprintf("Ведущий: %s. У вас минута, чтобы спрятаться!", seekerName)
 		r.buildArenaWithWallsLocked()
+	} else if r.isZombieMode() {
+		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
+		r.state.PowerUp.Active = false
+		r.state.PowerUps = nil
+		r.state.Mines = nil
+		r.state.Remaining = zombieRoundSecs
+		r.scatterPlayersLocked() // spread cats out so nobody starts tagged
 	} else {
 		r.spawnFishLocked()
 	}
 	for _, p := range r.players {
 		p.Alive = true
+		p.Zombie = false
 		p.Score = 0
 		p.Disguise = ""
 		p.Size = catSize
@@ -1429,6 +1456,16 @@ func (r *room) beginRoundLocked() {
 	r.state.BombTimer = bombTimerDuration
 	if r.isBombMode() {
 		r.assignBombToRandomAliveLocked(true)
+	}
+	if r.isZombieMode() {
+		zid := r.pickRandomSeekerLocked() // reuse the random-alive picker
+		r.state.SeekerID = zid            // patient zero (for reference/highlight)
+		zname := "случайный котик"
+		if z, ok := r.players[zid]; ok && z != nil {
+			z.Zombie = true
+			zname = fallbackName(z.Name)
+		}
+		r.state.Message = fmt.Sprintf("%s — первый зомби! Заразите всех за минуту!", zname)
 	}
 }
 
@@ -1448,6 +1485,28 @@ func (r *room) endRoundLocked(reason string) {
 }
 
 func (r *room) bestPlayerIDLocked() string {
+	if r.isZombieMode() {
+		if r.allZombiesLocked() {
+			// Zombies won: highlight the top infector.
+			var best *playerState
+			for _, p := range r.players {
+				if best == nil || p.Score > best.Score {
+					best = p
+				}
+			}
+			if best != nil {
+				return best.ID
+			}
+		} else {
+			// Survivors won: highlight any remaining human.
+			for _, p := range r.players {
+				if !p.Zombie {
+					return p.ID
+				}
+			}
+		}
+		return ""
+	}
 	if r.isHideSeekMode() {
 		if r.state.WinnerID != "" {
 			return r.state.WinnerID
@@ -1616,6 +1675,9 @@ func (r *room) updatePlayersLocked() {
 		if r.isBombMode() {
 			speed *= r.getBombSpeedMultiplierLocked(id)
 		}
+		if r.isZombieMode() && p.Zombie {
+			speed *= zombieSpeedBoost
+		}
 		p.X += input.X * speed
 		p.Y += input.Y * speed
 		p.Moving = math.Abs(input.X) > 0.01 || math.Abs(input.Y) > 0.01
@@ -1695,6 +1757,10 @@ func (r *room) isShooterMode() bool {
 	return r.state.Mode == "shooters"
 }
 
+func (r *room) isZombieMode() bool {
+	return r.state.Mode == "zombies"
+}
+
 func (r *room) currentWorldSize() float64 {
 	if r.roomType == hubMode {
 		return worldSize * hubWorldScale
@@ -1707,6 +1773,9 @@ func (r *room) currentWorldSize() float64 {
 	}
 	if r.isShooterMode() {
 		return worldSize * shooterWorldScale
+	}
+	if r.isZombieMode() {
+		return worldSize * zombieWorldScale
 	}
 	return worldSize
 }
@@ -1853,6 +1922,55 @@ func (r *room) handleBombTransferLocked() {
 			return
 		}
 	}
+}
+
+// handleZombieInfectionsLocked converts any human a zombie is touching. Each
+// fresh infection scores a point for the infecting zombie.
+func (r *room) handleZombieInfectionsLocked() {
+	zombies := make([]*playerState, 0, len(r.players))
+	humans := make([]*playerState, 0, len(r.players))
+	for _, p := range r.players {
+		if p.Zombie {
+			zombies = append(zombies, p)
+		} else {
+			humans = append(humans, p)
+		}
+	}
+	for _, z := range zombies {
+		for _, h := range humans {
+			if h.Zombie {
+				continue // already infected this pass
+			}
+			if math.Hypot(z.X-h.X, z.Y-h.Y) < zombieTouchDist {
+				h.Zombie = true
+				z.Score++
+				r.state.Message = fmt.Sprintf("%s заражён!", fallbackName(h.Name))
+			}
+		}
+	}
+}
+
+// scatterPlayersLocked drops every cat at a random spot in the arena.
+func (r *room) scatterPlayersLocked() {
+	world := r.currentWorldSize()
+	margin := catSize
+	for _, p := range r.players {
+		p.X = rand.Float64()*(world-2*margin) + margin
+		p.Y = rand.Float64()*(world-2*margin) + margin
+	}
+}
+
+// allZombiesLocked reports whether every player in the room is a zombie.
+func (r *room) allZombiesLocked() bool {
+	if len(r.players) == 0 {
+		return false
+	}
+	for _, p := range r.players {
+		if !p.Zombie {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *room) pickRandomSeekerLocked() string {
