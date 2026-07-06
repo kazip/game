@@ -180,6 +180,7 @@ type scoreEntry struct {
 	PlayerID  string    `json:"playerId"`
 	Name      string    `json:"name"`
 	Score     int       `json:"score"`
+	Mode      string    `json:"mode,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

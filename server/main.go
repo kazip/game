@@ -778,9 +778,17 @@ func (s *server) addScore(entry scoreEntry) {
 		}
 		return s.scores[i].Score > s.scores[j].Score
 	})
-	if len(s.scores) > 50 {
-		s.scores = s.scores[:50]
+	// Keep the top 50 PER MODE, so a high-scoring mode can't evict every entry
+	// of a lower-scoring one (scores across modes aren't comparable).
+	perMode := map[string]int{}
+	kept := s.scores[:0]
+	for _, e := range s.scores {
+		if perMode[e.Mode] < 50 {
+			kept = append(kept, e)
+			perMode[e.Mode]++
+		}
 	}
+	s.scores = kept
 	s.persistLocked()
 }
 
@@ -849,14 +857,20 @@ func (s *server) persistLocked() {
 	}
 }
 
-func (s *server) topScores(limit int) []scoreEntry {
+// topScores returns the highest `limit` scores, optionally filtered to one mode.
+func (s *server) topScores(limit int, mode string) []scoreEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if limit > len(s.scores) {
-		limit = len(s.scores)
+	out := make([]scoreEntry, 0, limit)
+	for _, e := range s.scores {
+		if mode != "" && e.Mode != mode {
+			continue
+		}
+		out = append(out, e)
+		if len(out) >= limit {
+			break
+		}
 	}
-	out := make([]scoreEntry, limit)
-	copy(out, s.scores[:limit])
 	return out
 }
 
@@ -968,7 +982,7 @@ func (s *server) handleCats(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleScores(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, map[string]any{"scores": s.topScores(10)})
+		writeJSON(w, map[string]any{"scores": s.topScores(10, r.URL.Query().Get("mode"))})
 	case http.MethodPost:
 		var payload scoreEntry
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
