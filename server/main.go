@@ -1671,6 +1671,10 @@ func (r *room) launchPortal(roomType string, ids []string) {
 
 func (r *room) updatePlayersLocked() {
 	world := r.currentWorldSize()
+	zombieMult := 1.0
+	if r.isZombieMode() {
+		zombieMult = r.zombieSpeedMultLocked()
+	}
 	for id, p := range r.players {
 		if !p.Alive {
 			continue
@@ -1686,7 +1690,7 @@ func (r *room) updatePlayersLocked() {
 			speed *= r.getBombSpeedMultiplierLocked(id)
 		}
 		if r.isZombieMode() && p.Zombie {
-			speed *= zombieSpeedBoost
+			speed *= zombieMult
 		}
 		p.X += input.X * speed
 		p.Y += input.Y * speed
@@ -1981,6 +1985,26 @@ func (r *room) scatterPlayersLocked() {
 	}
 }
 
+// zombieSpeedMultLocked returns the shared zombie speed multiplier: 1.0 for a
+// single zombie, decreasing by zombieSlowPerExtra for each additional zombie
+// down to zombieSlowFloor.
+func (r *room) zombieSpeedMultLocked() float64 {
+	count := 0
+	for _, p := range r.players {
+		if p.Zombie {
+			count++
+		}
+	}
+	if count <= 1 {
+		return zombieBaseSpeed
+	}
+	mult := zombieBaseSpeed - float64(count-1)*zombieSlowPerExtra
+	if mult < zombieSlowFloor {
+		mult = zombieSlowFloor
+	}
+	return mult
+}
+
 // allZombiesLocked reports whether every player in the room is a zombie.
 func (r *room) allZombiesLocked() bool {
 	if len(r.players) == 0 {
@@ -2038,7 +2062,7 @@ func (r *room) spawnHideAndSeekItemsLocked() []powerUpState {
 	if totalPlayers == 0 {
 		return nil
 	}
-	count := totalPlayers * 3
+	count := totalPlayers * 6
 	world := r.currentWorldSize()
 	items := make([]powerUpState, 0, count)
 	margin := 20.0

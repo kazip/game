@@ -8,7 +8,7 @@ const (
 	hideSeekWorldScale    = 3.0
 	shooterWorldScale     = 3.0
 	hideSeekHideDuration  = 60.0
-	hideSeekSeekDuration  = 180.0
+	hideSeekSeekDuration  = 90.0
 	hideSeekSeekerBoost   = 1.2
 	shooterPrepDuration   = 30.0
 	shooterRoundDuration  = 180.0
@@ -118,7 +118,12 @@ const (
 	zombieWorldScale = 3.0  // arena size (== hide-and-seek)
 	zombieRoundSecs  = 60.0 // one minute to infect everyone
 	zombieTouchDist  = 44.0 // world units for a tag
-	zombieSpeedBoost = 1.12 // zombies chase slightly faster
+	// Zombie speed scales DOWN with the horde size: a lone zombie is slightly
+	// faster than survivors (1.03), each extra zombie shaves a little off (down
+	// to a floor), so zombies must gang up to corner the last runners.
+	zombieBaseSpeed    = 1.03 // multiplier for a single zombie
+	zombieSlowPerExtra = 0.03 // reduction per zombie beyond the first
+	zombieSlowFloor    = 0.75 // minimum speed multiplier
 )
 
 type hubPortal struct {
