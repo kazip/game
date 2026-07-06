@@ -265,13 +265,8 @@ type gameState struct {
 	Background string  `json:"background,omitempty"`
 	WorldW     float64 `json:"worldW,omitempty"`
 	WorldH     float64 `json:"worldH,omitempty"`
-	// Walkable collision grid (hub only) so the client can draw a debug overlay
-	// of exactly what the server enforces. Row-major base64 bitmask, 1=walkable.
-	WalkMask   string `json:"walkMask,omitempty"`
-	WalkCols   int    `json:"walkCols,omitempty"`
-	WalkRows   int    `json:"walkRows,omitempty"`
-	TickIndex  uint32 `json:"tickIndex"`
-	ServerTime int64  `json:"serverTime"`
+	TickIndex  uint32  `json:"tickIndex"`
+	ServerTime int64   `json:"serverTime"`
 }
 
 type wall struct {
