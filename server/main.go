@@ -2999,7 +2999,35 @@ func (r *room) buildArenaWithWallsLocked() {
 
 	r.state.Walls = layout
 	r.handlePowerUpAfterWallChangeLocked()
+	r.resolveItemsAfterWallChangeLocked()
 	r.resolvePlayersAfterWallChangeLocked()
+}
+
+// resolveItemsAfterWallChangeLocked re-rolls any field item (hide-seek disguises,
+// shooter loot, …) that ended up inside a wall to a wall-free spot, since those
+// are spawned at random positions before the maze is generated.
+func (r *room) resolveItemsAfterWallChangeLocked() {
+	world := r.currentWorldSize()
+	margin := 20.0
+	for i := range r.state.PowerUps {
+		it := &r.state.PowerUps[i]
+		if !it.Active {
+			continue
+		}
+		radius := it.Size/2 + 2
+		if !circleIntersectsAnyWall(it.X, it.Y, radius, r.state.Walls) {
+			continue
+		}
+		for a := 0; a < 40; a++ {
+			x := rand.Float64()*(world-2*margin) + margin
+			y := rand.Float64()*(world-2*margin) + margin
+			if !circleIntersectsAnyWall(x, y, radius, r.state.Walls) {
+				it.X = x
+				it.Y = y
+				break
+			}
+		}
+	}
 }
 
 func (r *room) generateWallsLayoutForPlayers(catCells []gridCell, fishCell gridCell) []wall {
