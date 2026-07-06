@@ -630,9 +630,11 @@ func (s *server) createRoomLocked(cfg roomConfig) *room {
 	// 2:1 plaza matching hub_background.png, so its portals line up with the art.
 	background := ""
 	worldW, worldH := world, world
+	walkMask, walkCols, walkRows := "", 0, 0
 	if roomType == hubMode {
 		background = hubMode
 		worldW, worldH = hubWorldW, hubWorldH
+		walkMask, walkCols, walkRows = hubWalkMaskB64, hubWalkCols, hubWalkRows
 	}
 
 	r.state = gameState{
@@ -649,6 +651,9 @@ func (s *server) createRoomLocked(cfg roomConfig) *room {
 		Background: background,
 		WorldW:     worldW,
 		WorldH:     worldH,
+		WalkMask:   walkMask,
+		WalkCols:   walkCols,
+		WalkRows:   walkRows,
 		ServerTime: time.Now().UnixMilli(),
 	}
 	s.rooms[cfg.id] = r
