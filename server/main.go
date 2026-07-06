@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -1609,14 +1610,48 @@ func (r *room) bestPlayerIDLocked() string {
 
 // updateHubLocked moves cats around a hub with no game mechanics (no walls,
 // mines, fish, combat). Every cat is always "alive" so it renders.
+// hubWalkMask is the decoded plaza collision grid (1 = walkable). See types.go.
+var hubWalkMask = decodeHubWalkMask()
+
+func decodeHubWalkMask() []bool {
+	data, err := base64.StdEncoding.DecodeString(hubWalkMaskB64)
+	if err != nil {
+		log.Printf("hub walk mask decode failed: %v", err)
+		return nil
+	}
+	mask := make([]bool, hubWalkCols*hubWalkRows)
+	for i := range mask {
+		if i/8 < len(data) {
+			mask[i] = data[i/8]>>(7-uint(i%8))&1 == 1
+		}
+	}
+	return mask
+}
+
+// hubWalkableAt reports whether the world point is on the walkable plaza. The
+// mask is eroded by the cat radius, so testing the cat's centre keeps its whole
+// body off the buildings/trees/roads.
+func hubWalkableAt(x, y float64) bool {
+	if hubWalkMask == nil {
+		return true // fail-open: never trap cats if the mask is missing
+	}
+	if x < 0 || y < 0 || x >= hubWorldW || y >= hubWorldH {
+		return false
+	}
+	c := int(x / hubWorldW * hubWalkCols)
+	r := int(y / hubWorldH * hubWalkRows)
+	if c < 0 || c >= hubWalkCols || r < 0 || r >= hubWalkRows {
+		return false
+	}
+	return hubWalkMask[r*hubWalkCols+c]
+}
+
 func (r *room) updateHubLocked() {
 	worldW, worldH := hubWorldW, hubWorldH
 	for id, p := range r.players {
 		p.Alive = true
 		input := r.inputs[id]
 		speed := catSpeed * tickRate.Seconds()
-		p.X += input.X * speed
-		p.Y += input.Y * speed
 		p.Moving = math.Abs(input.X) > 0.01 || math.Abs(input.Y) > 0.01
 		if input.X > 0.01 {
 			p.Facing = 1
@@ -1627,8 +1662,16 @@ func (r *room) updateHubLocked() {
 			p.StepAccum += tickRate.Seconds() * 4
 			p.WalkCycle = math.Mod(p.StepAccum, 1)
 		}
-		p.X = clampFloat(p.X, p.Size/2, worldW-p.Size/2)
-		p.Y = clampFloat(p.Y, p.Size/2, worldH-p.Size/2)
+		// Move per-axis and reject any step that leaves the plaza, so cats slide
+		// along the buildings/trees instead of stopping dead or clipping through.
+		newX := clampFloat(p.X+input.X*speed, p.Size/2, worldW-p.Size/2)
+		newY := clampFloat(p.Y+input.Y*speed, p.Size/2, worldH-p.Size/2)
+		if hubWalkableAt(newX, p.Y) {
+			p.X = newX
+		}
+		if hubWalkableAt(p.X, newY) {
+			p.Y = newY
+		}
 	}
 	r.updatePortalsLocked()
 }

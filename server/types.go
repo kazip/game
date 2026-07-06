@@ -146,6 +146,17 @@ var hubPortals = []hubPortal{
 	{"zombies", 540, 389},       // left       — green
 }
 
+// Hub collision: a 100×50 row-major bitmask (1 = walkable) over the 2000×1000
+// plaza, derived from hub_background.png and eroded by the cat radius so a cat's
+// body never overlaps the buildings/trees/roads around the square. Cats are
+// confined to the stone plaza + the 5 portal pads + the paths between them.
+const (
+	hubWalkCols = 100
+	hubWalkRows = 50
+)
+
+const hubWalkMaskB64 = "AAAAAAAAAAAAAAAAAAAAAAAAxmAAAAAAAAAAAAAAH/8AAAAAAAAAAAAAAf/wAAAAAAAAAAAAAB//AAAAAAAAAAAAcAf//GAAAAAAAAAAPgP///4AAAAAAAAAH+A////gAAAAAAAAA/4D///8AAAAAAAAAA/4P///wAAAAAAAAAB/g////AAAAAAAAAAH/z////gAAAAAAAAAf/////8AIAAAAAAAB//////wfgAAAAAAAf//////B/gAAAAAAD/////////AAAAAAAf/////////AAAAAAD/////////8AAAAAAP/////////wAAAAAA//////////gAAAAAD/////////+AAAAAAP/////////wAAAAAAf////////+AAAAAAB/////////wAAAAAAD/////////AAAAAAAP////////8AAAAAAA/////////wAAAAAAH/////////gAAAAAA//////////4AAAAAD//////////AAAAAAP/////////wAAAAAA/////////8AAAAAAAP////////AAAAAAAAH///////gAAAAAAAAP//////8AAAAAAAAAf//////gAAAAAAAAA//////8AAAAAAAAAD//////wAAAAAAAAAP//////AAAAAAAAAA//////+AAAAAAAAAH//////4AAAAAAAAA///////wAAAAAAAAB///////AAAAAAAAAH/+Ph//4AAAAAAAAAf/4eA//gAAAAAAAAAx/AQB/8AAAAAAAAABAwAACAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
 // portalStatus is broadcast in the hub's game state so clients can render the
 // live pad occupancy and countdown on each portal sign.
 type portalStatus struct {
