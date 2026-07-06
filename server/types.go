@@ -60,8 +60,12 @@ const (
 	reconnectGrace        = 10 * time.Second
 
 	// ─── Hub / room-tree ────────────────────────────────────────────────
-	hubMode        = "hub"           // a free-roam social room, no game logic
-	hubWorldScale  = 3.0             // hub is the same size as the big modes
+	hubMode       = "hub" // a free-roam social room, no game logic
+	hubWorldScale = 3.0   // legacy square size (still used for currentWorldSize)
+	// The hub is a 2:1 plaza matching the hub_background.png art (1774×887).
+	// Portal positions below are placed on the circles painted in that image.
+	hubWorldW      = 2000.0
+	hubWorldH      = 1000.0
 	hubMaxPlayers  = 50              // soft cap on a single hub
 	defaultRoomMax = 12              // fallback capacity for a game room
 	emptyRoomGrace = 5 * time.Minute // idle non-persistent rooms are GC'd after this
@@ -131,14 +135,15 @@ type hubPortal struct {
 	X, Y float64
 }
 
-// Positions must match the client's HUB_PORTALS (hub world = 1500, centre 750).
-// Pentagon around the centre (radius 330).
+// Positions must match the client's HUB_PORTALS. Placed on the coloured circles
+// painted in hub_background.png (world = 2000×1000, 2:1). Each pair is the circle
+// centre as a fraction of the image mapped into world units.
 var hubPortals = []hubPortal{
-	{"classic", 750, 420},
-	{"shooters", 1064, 648},
-	{"bomb-pass", 944, 1017},
-	{"hide-and-seek", 556, 1017},
-	{"zombies", 436, 648},
+	{"classic", 999, 124},       // top       — green
+	{"shooters", 1457, 388},     // right      — yellow
+	{"bomb-pass", 1282, 832},    // bottom-right — red
+	{"hide-and-seek", 710, 832}, // bottom-left — blue
+	{"zombies", 540, 389},       // left       — green
 }
 
 // portalStatus is broadcast in the hub's game state so clients can render the
@@ -243,8 +248,14 @@ type gameState struct {
 	WinnerID   string         `json:"winnerId"`
 	Golden     bool           `json:"goldenChainActive"`
 	Portals    []portalStatus `json:"portals,omitempty"`
-	TickIndex  uint32         `json:"tickIndex"`
-	ServerTime int64          `json:"serverTime"`
+	// Location art + dimensions (constant per room; sent in the full snapshot).
+	// Background names a client-side backdrop image ("" = default grass/water).
+	// WorldW/WorldH give the arena size so a location can be non-square (the hub).
+	Background string  `json:"background,omitempty"`
+	WorldW     float64 `json:"worldW,omitempty"`
+	WorldH     float64 `json:"worldH,omitempty"`
+	TickIndex  uint32  `json:"tickIndex"`
+	ServerTime int64   `json:"serverTime"`
 }
 
 type wall struct {

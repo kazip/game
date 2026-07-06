@@ -625,17 +625,29 @@ func (s *server) createRoomLocked(cfg roomConfig) *room {
 		bombPowerUpTimer: bombPowerUpInterval,
 		shootRequests:    make(map[string]bool),
 	}
+	// Location backdrop + arena dimensions. Most modes are square; the hub is a
+	// 2:1 plaza matching hub_background.png, so its portals line up with the art.
+	background := ""
+	worldW, worldH := world, world
+	if roomType == hubMode {
+		background = hubMode
+		worldW, worldH = hubWorldW, hubWorldH
+	}
+
 	r.state = gameState{
 		RoomName:   name,
 		Mode:       roomType,
 		Phase:      phase,
-		Fish:       fishState{X: world / 2, Y: world / 2, Size: fishSize, Alive: false, Type: "normal", Direction: 1},
+		Fish:       fishState{X: worldW / 2, Y: worldH / 2, Size: fishSize, Alive: false, Type: "normal", Direction: 1},
 		PowerUp:    powerUpState{Size: powerUpSize},
 		PowerUps:   nil,
 		Remaining:  roundDuration.Seconds(),
 		HidePhase:  "",
 		ShootPhase: "",
 		Message:    message,
+		Background: background,
+		WorldW:     worldW,
+		WorldH:     worldH,
 		ServerTime: time.Now().UnixMilli(),
 	}
 	s.rooms[cfg.id] = r
@@ -1259,8 +1271,11 @@ func (r *room) cancelDisconnectTimerLocked(playerID string) {
 func (r *room) ensurePlayer(id, name string) *playerState {
 	player, ok := r.players[id]
 	if !ok {
-		world := r.currentWorldSize()
-		player = &playerState{ID: id, Name: fallbackName(name), Size: catSize, X: world / 2, Y: world / 2, Facing: 1}
+		spawnX, spawnY := r.currentWorldSize()/2, r.currentWorldSize()/2
+		if r.roomType == hubMode {
+			spawnX, spawnY = hubWorldW/2, hubWorldH/2 // centre of the plaza
+		}
+		player = &playerState{ID: id, Name: fallbackName(name), Size: catSize, X: spawnX, Y: spawnY, Facing: 1}
 		r.players[id] = player
 	}
 	if name != "" {
@@ -1595,7 +1610,7 @@ func (r *room) bestPlayerIDLocked() string {
 // updateHubLocked moves cats around a hub with no game mechanics (no walls,
 // mines, fish, combat). Every cat is always "alive" so it renders.
 func (r *room) updateHubLocked() {
-	world := r.currentWorldSize()
+	worldW, worldH := hubWorldW, hubWorldH
 	for id, p := range r.players {
 		p.Alive = true
 		input := r.inputs[id]
@@ -1612,8 +1627,8 @@ func (r *room) updateHubLocked() {
 			p.StepAccum += tickRate.Seconds() * 4
 			p.WalkCycle = math.Mod(p.StepAccum, 1)
 		}
-		p.X = clampFloat(p.X, p.Size/2, world-p.Size/2)
-		p.Y = clampFloat(p.Y, p.Size/2, world-p.Size/2)
+		p.X = clampFloat(p.X, p.Size/2, worldW-p.Size/2)
+		p.Y = clampFloat(p.Y, p.Size/2, worldH-p.Size/2)
 	}
 	r.updatePortalsLocked()
 }
