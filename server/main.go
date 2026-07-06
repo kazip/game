@@ -506,6 +506,8 @@ type room struct {
 	bombPowerUpTimer   float64
 	shootRequests      map[string]bool
 	shootingUnlocked   bool
+	endDelay           float64 // shooters: grace before results so the last shot is seen/heard
+	endReason          string
 }
 
 type server struct {
@@ -1339,13 +1341,19 @@ func (r *room) step() {
 			}
 			r.tickShooterPlayersLocked()
 			r.updateShotsLocked()
-			if r.state.Remaining <= 0 {
-				r.endRoundLocked("Время вышло")
-				return
-			}
-			if r.countAlivePlayersLocked() <= 1 {
-				r.endRoundLocked("Выжил только один котик!")
-				return
+			// Delay the round end briefly so the final (killing) shot gets
+			// broadcast — otherwise it's added and cleared within one tick and
+			// the client never sees/hears it.
+			if r.endDelay > 0 {
+				r.endDelay -= tickRate.Seconds()
+				if r.endDelay <= 0 {
+					r.endRoundLocked(r.endReason)
+					return
+				}
+			} else if r.state.Remaining <= 0 {
+				r.beginEndDelayLocked("Время вышло")
+			} else if r.countAlivePlayersLocked() <= 1 {
+				r.beginEndDelayLocked("Выжил только один котик!")
 			}
 		} else if r.isHideSeekMode() {
 			r.state.Remaining -= tickRate.Seconds()
@@ -1411,6 +1419,8 @@ func (r *room) beginRoundLocked() {
 	r.state.ShootPhase = ""
 	r.bombSlowTimers = make(map[string]float64)
 	r.shootRequests = make(map[string]bool)
+	r.endDelay = 0
+	r.endReason = ""
 	r.resetBombPassHistoryLocked()
 	// Revive everyone BEFORE any mode picks its random "it": otherwise the pool
 	// is only whoever survived the last round (e.g. the hide-and-seek seeker,
@@ -1506,6 +1516,16 @@ func (r *room) endRoundLocked(reason string) {
 	r.state.ShootPhase = ""
 	r.shootingUnlocked = false
 	r.state.WinnerID = r.bestPlayerIDLocked()
+}
+
+// beginEndDelayLocked schedules the round to end after a short grace so the last
+// shot(s) finish playing on the client. No-op if already counting down.
+func (r *room) beginEndDelayLocked(reason string) {
+	if r.endDelay > 0 {
+		return
+	}
+	r.endDelay = 0.5
+	r.endReason = reason
 }
 
 func (r *room) bestPlayerIDLocked() string {
