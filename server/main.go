@@ -2263,6 +2263,10 @@ func (r *room) resolveShooterCombatLocked() {
 
 		// With a loaded weapon → ranged shot; otherwise → bare-paws punch.
 		hasWeapon := shooter.Weapon != "" && shooter.Ammo > 0
+		usedWeapon := "fist"
+		if hasWeapon {
+			usedWeapon = shooter.Weapon
+		}
 		var atkRange float64
 		var atkDamage int
 		if hasWeapon {
@@ -2353,6 +2357,7 @@ func (r *room) resolveShooterCombatLocked() {
 			FromY:     shooter.Y,
 			ToX:       shotToX,
 			ToY:       shotToY,
+			Weapon:    usedWeapon,
 			Remaining: shooterShotLifetime,
 		})
 	}

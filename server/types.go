@@ -275,6 +275,7 @@ type shotEvent struct {
 	FromY     float64 `json:"fromY"`
 	ToX       float64 `json:"toX"`
 	ToY       float64 `json:"toY"`
+	Weapon    string  `json:"weapon,omitempty"` // weapon used ("fist" for bare-paws) — for the right sfx/visual
 	Remaining float64 `json:"remaining"`
 }
 
