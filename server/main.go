@@ -524,7 +524,8 @@ type server struct {
 	cats           map[string]catProfile
 	scores         []scoreEntry
 	reports        []reportEntry
-	ratings        map[string]*playerRating   // persistent glory points keyed by playerId
+	ratings        map[string]*playerRating   // persistent rating records keyed by playerId
+	ratingHistory  []ratingHistoryEntry       // per-match rating-change log (analytics/debug)
 	storeExtra     map[string]json.RawMessage // unknown top-level keys, preserved (fwd compat)
 	storeVersion   int                        // schema version last seen on disk (never regress it)
 	dataPath       string                     // resolved persistent path to data.json
@@ -888,10 +889,18 @@ func (s *server) loadFromDisk() {
 	if env.Ratings != nil {
 		s.ratings = env.Ratings
 	}
+	// Migrate/normalise every rating (legacy glory-point "overall" → public
+	// rating, default hidden MMR, rank/max_rank) so old data upgrades cleanly.
+	for _, pr := range s.ratings {
+		ensureRatingDefaults(pr)
+	}
+	if env.RatingHistory != nil {
+		s.ratingHistory = env.RatingHistory
+	}
 	s.storeExtra = env.Extra // carry unknown top-level keys forward (fwd compat)
 	s.storeVersion = env.Version
-	log.Printf("data: loaded %s (schema v%d: %d cats, %d ratings, %d scores, %d reports)",
-		s.dataPath, env.Version, len(s.cats), len(s.ratings), len(s.scores), len(s.reports))
+	log.Printf("data: loaded %s (schema v%d: %d cats, %d ratings, %d scores, %d reports, %d rating-history)",
+		s.dataPath, env.Version, len(s.cats), len(s.ratings), len(s.scores), len(s.reports), len(s.ratingHistory))
 }
 
 // persistLocked writes the whole store atomically: encode → temp file → back up
@@ -906,12 +915,13 @@ func (s *server) persistLocked() {
 		version = s.storeVersion
 	}
 	env := storeEnvelope{
-		Version: version,
-		Cats:    s.cats,
-		Scores:  s.scores,
-		Reports: s.reports,
-		Ratings: s.ratings,
-		Extra:   s.storeExtra,
+		Version:       version,
+		Cats:          s.cats,
+		Scores:        s.scores,
+		Reports:       s.reports,
+		Ratings:       s.ratings,
+		RatingHistory: s.ratingHistory,
+		Extra:         s.storeExtra,
 	}
 	data, err := json.MarshalIndent(env, "", "  ")
 	if err != nil {
@@ -957,9 +967,76 @@ func (s *server) ratingFor(id string) (int, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if pr, ok := s.ratings[id]; ok {
-		return pr.Overall, tierForRating(pr.Overall)
+		return pr.PublicRating, tierForRating(pr.PublicRating)
 	}
 	return 0, 0
+}
+
+// ensureRatingRecordLocked fetches or creates a player's rating record (with
+// defaults / legacy migration applied). Caller holds s.mu.
+func (s *server) ensureRatingRecordLocked(id, name string) *playerRating {
+	pr, ok := s.ratings[id]
+	if !ok {
+		pr = &playerRating{PlayerID: id}
+		s.ratings[id] = pr
+	}
+	if name != "" {
+		pr.Name = name
+	}
+	ensureRatingDefaults(pr)
+	return pr
+}
+
+// applyMatchResultLocked is the RatingService core: apply ONE finished match to a
+// player against a single opponent MMR. It updates the hidden Elo (up or down),
+// adds only-grows public points by opponent strength, bumps the never-lowered
+// rank, and returns the history entry. Caller holds s.mu.
+func (s *server) applyMatchResultLocked(pr *playerRating, oppMMR int, win bool, mode, matchID, oppID string, now time.Time) ratingHistoryEntry {
+	ensureRatingDefaults(pr)
+	oldMMR := pr.HiddenMMR
+	oldPub := pr.PublicRating
+	oldRank := pr.Rank
+
+	// 1) Hidden MMR (real Elo, can fall). Strength is judged on the PRE-match MMR.
+	pr.HiddenMMR = oldMMR + mmrDelta(oldMMR, oppMMR, win)
+	if pr.HiddenMMR < 1 {
+		pr.HiddenMMR = 1
+	}
+	// 2) Public points (only grows), by opponent strength at match time.
+	pts := publicPoints(oldMMR, oppMMR, win)
+	pr.PublicRating += pts
+	pr.Overall = pr.PublicRating // keep legacy mirror aligned
+	pr.ByMode[mode] += pts
+	// 3) Rank (never lowered — public rating only grows anyway).
+	newRank := ratingTiers[tierForRating(pr.PublicRating)].Title
+	pr.Rank = newRank
+	if tierIndexOfName(pr.MaxRank) < tierForRating(pr.PublicRating) {
+		pr.MaxRank = newRank
+	}
+	pr.Games++
+	if win {
+		pr.Wins++
+	}
+	pr.UpdatedAt = now
+
+	result := "loss"
+	if win {
+		result = "win"
+	}
+	return ratingHistoryEntry{
+		PlayerID: pr.PlayerID, OpponentID: oppID, MatchID: matchID, Mode: mode, Result: result,
+		OldHiddenMMR: oldMMR, NewHiddenMMR: pr.HiddenMMR, HiddenMMRDelta: pr.HiddenMMR - oldMMR,
+		OldPublicRating: oldPub, NewPublicRating: pr.PublicRating, PublicRatingDelta: pts,
+		OldRank: oldRank, NewRank: newRank, CreatedAt: now,
+	}
+}
+
+// appendRatingHistoryLocked records a match's rating change, capped in size.
+func (s *server) appendRatingHistoryLocked(h ratingHistoryEntry) {
+	s.ratingHistory = append(s.ratingHistory, h)
+	if len(s.ratingHistory) > ratingHistoryMax {
+		s.ratingHistory = s.ratingHistory[len(s.ratingHistory)-ratingHistoryMax:]
+	}
 }
 
 // ratingParticipant is a round-end snapshot of one cat, captured under r.mu and
@@ -970,76 +1047,57 @@ type ratingParticipant struct {
 	Winner bool
 }
 
-// awardRatings updates persistent glory points after a round. It runs in its own
-// goroutine (spawned from endRoundLocked) so it can take s.mu and, separately,
-// the room's mu WITHOUT ever nesting them — it holds each on its own, honouring
-// the global s.mu-before-r.mu order. Winners gain more for beating a
-// higher-rated field (ELO expected score); everyone gets a small participation
-// trickle. Points only ever grow.
+type ratingUpdate struct {
+	public int
+	tier   int
+	gain   int
+}
+
+// awardRatings applies the finished round to every participant's rating. Runs in
+// its own goroutine (spawned from endRoundLocked) so it takes s.mu and the room's
+// mu separately, never nested (global order: s.mu before r.mu). Each cat's
+// "opponent" is the average hidden MMR of the OTHER cats in the lobby, and its
+// result is win (round winner) or loss.
 func (r *room) awardRatings(parts []ratingParticipant, mode string) {
 	s := r.server
+	now := time.Now()
+	matchID := fmt.Sprintf("%s-%d", r.id, now.UnixMilli())
+
 	s.mu.Lock()
-	// Snapshot current overall ratings for the expected-score math.
-	cur := make(map[string]int, len(parts))
-	total := 0
+	// Snapshot pre-match hidden MMRs so every cat is scored against the same field.
+	mmr := make(map[string]int, len(parts))
+	sum := 0
 	for _, p := range parts {
-		ov := 0
-		if pr, ok := s.ratings[p.ID]; ok {
-			ov = pr.Overall
-		}
-		cur[p.ID] = ov
-		total += ov
+		pr := s.ensureRatingRecordLocked(p.ID, p.Name)
+		mmr[p.ID] = pr.HiddenMMR
+		sum += pr.HiddenMMR
 	}
-	updated := make(map[string]int, len(parts)) // id -> new overall
+	updated := make(map[string]ratingUpdate, len(parts))
 	for _, p := range parts {
-		own := cur[p.ID]
-		// Average rating of the OTHER cats — the field this player faced.
-		avgOpp := own
+		own := mmr[p.ID]
+		oppMMR := own
 		if len(parts) > 1 {
-			avgOpp = (total - own) / (len(parts) - 1)
+			oppMMR = (sum - own) / (len(parts) - 1) // average of the OTHER cats
 		}
-		// ELO expected score: chance THIS cat was "supposed" to win vs the field.
-		e := 1.0 / (1.0 + math.Pow(10, float64(avgOpp-own)/400.0))
-		var gain int
-		if p.Winner {
-			gain = 20 + int(math.Round(30*(1-e))) // ~20 (weak field) … ~50 (strong)
-		} else {
-			gain = 3 + int(math.Round(5*(1-e))) // small participation trickle
-		}
-		if gain < 1 {
-			gain = 1
-		}
-		pr, ok := s.ratings[p.ID]
-		if !ok {
-			pr = &playerRating{PlayerID: p.ID, ByMode: map[string]int{}}
-			s.ratings[p.ID] = pr
-		}
-		if pr.ByMode == nil {
-			pr.ByMode = map[string]int{}
-		}
-		if p.Name != "" {
-			pr.Name = p.Name
-		}
-		pr.Overall += gain
-		pr.ByMode[mode] += gain
-		pr.Games++
-		if p.Winner {
-			pr.Wins++
-		}
-		pr.UpdatedAt = time.Now()
-		updated[p.ID] = pr.Overall
+		pr := s.ratings[p.ID]
+		h := s.applyMatchResultLocked(pr, oppMMR, p.Winner, mode, matchID, "field", now)
+		s.appendRatingHistoryLocked(h)
+		updated[p.ID] = ratingUpdate{public: pr.PublicRating, tier: tierForRating(pr.PublicRating), gain: h.PublicRatingDelta}
 	}
 	s.persistLocked()
 	s.mu.Unlock()
 
-	// Refresh the live in-room rating/tier so the число updates without a rejoin.
+	// Refresh the live in-room rating so the results screen shows the new number
+	// and the points gained; force a full snapshot (RatingGain isn't patch-plumbed).
 	r.mu.Lock()
-	for id, overall := range updated {
+	for id, u := range updated {
 		if p, ok := r.players[id]; ok {
-			p.Rating = overall
-			p.Tier = tierForRating(overall)
+			p.Rating = u.public
+			p.Tier = u.tier
+			p.RatingGain = u.gain
 		}
 	}
+	r.lastBroadcastState = nil
 	r.mu.Unlock()
 }
 
@@ -1178,23 +1236,40 @@ func (s *server) handleRating(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	overall, wins, games := 0, 0, 0
+	public, wins, games := 0, 0, 0
+	maxRank := ratingTiers[0].Title
 	byMode := map[string]int{}
 	if pr, ok := s.ratings[id]; ok {
-		overall, wins, games = pr.Overall, pr.Wins, pr.Games
+		ensureRatingDefaults(pr)
+		public, wins, games, maxRank = pr.PublicRating, pr.Wins, pr.Games, pr.MaxRank
 		for m, v := range pr.ByMode {
 			byMode[m] = v
 		}
 	}
 	s.mu.Unlock()
-	tier := tierForRating(overall)
+
+	tier := tierForRating(public)
+	// Progress to the next звание (0 / at-max when already top tier). Never
+	// expose hidden MMR.
+	nextAt, toNext, nextTitle := 0, 0, ""
+	if tier < len(ratingTiers)-1 {
+		nextAt = ratingTiers[tier+1].Min
+		toNext = nextAt - public
+		nextTitle = ratingTiers[tier+1].Title
+	}
 	writeJSON(w, map[string]any{
-		"overall": overall,
-		"tier":    tier,
-		"title":   ratingTiers[tier].Title,
-		"byMode":  byMode,
-		"wins":    wins,
-		"games":   games,
+		"publicRating": public,
+		"overall":      public, // legacy alias for older clients
+		"tier":         tier,
+		"rank":         ratingTiers[tier].Title,
+		"title":        ratingTiers[tier].Title, // legacy alias
+		"maxRank":      maxRank,
+		"nextRank":     nextTitle,
+		"nextAt":       nextAt,
+		"toNextRank":   toNext,
+		"byMode":       byMode,
+		"wins":         wins,
+		"games":        games,
 	})
 }
 
@@ -1701,6 +1776,7 @@ func (r *room) beginRoundLocked() {
 		p.Alive = true
 		p.Zombie = false
 		p.Score = 0
+		p.RatingGain = 0 // cleared each round; set by awardRatings at round end
 		// This-round stats reset here; the cumulative ones (Kills, Deaths, …) do NOT.
 		p.RoundKills = 0
 		p.RoundDeaths = 0

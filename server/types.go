@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"time"
 )
 
@@ -57,12 +58,13 @@ func splitExtra(data []byte, known ...string) map[string]json.RawMessage {
 // storeEnvelope is the whole on-disk document. Extra preserves unknown top-level
 // collections a future server might add (e.g. "achievements").
 type storeEnvelope struct {
-	Version int                        `json:"version"`
-	Cats    map[string]catProfile      `json:"cats"`
-	Scores  []scoreEntry               `json:"scores"`
-	Reports []reportEntry              `json:"reports"`
-	Ratings map[string]*playerRating   `json:"ratings"`
-	Extra   map[string]json.RawMessage `json:"-"`
+	Version       int                        `json:"version"`
+	Cats          map[string]catProfile      `json:"cats"`
+	Scores        []scoreEntry               `json:"scores"`
+	Reports       []reportEntry              `json:"reports"`
+	Ratings       map[string]*playerRating   `json:"ratings"`
+	RatingHistory []ratingHistoryEntry       `json:"ratingHistory"`
+	Extra         map[string]json.RawMessage `json:"-"`
 }
 
 func (e storeEnvelope) MarshalJSON() ([]byte, error) {
@@ -81,7 +83,7 @@ func (e *storeEnvelope) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*e = storeEnvelope(a)
-	e.Extra = splitExtra(data, "version", "cats", "scores", "reports", "ratings")
+	e.Extra = splitExtra(data, "version", "cats", "scores", "reports", "ratings", "ratingHistory")
 	return nil
 }
 
@@ -318,34 +320,46 @@ type scoreEntry struct {
 }
 
 // ─── Player rating / ранги (звания) ─────────────────────────────────────────
-// Accumulating "glory points": a player's rating only ever GROWS. Winning a
-// round pays more when the beaten field is higher-rated than you (ELO expected
-// score); losing still trickles a few participation points. Overall rating is
-// the sum of the per-mode totals; ранги (звания) are thresholds on the overall.
-// The ladder below is mirrored VERBATIM in the Godot client (Main.gd RANK_TIERS)
-// so both sides render the same звание — keep them in sync.
+// Two ratings per player (see the RatingService — applyMatchResultLocked):
+//   - HiddenMMR  — a real Elo (K=32) used for matchmaking & opponent strength.
+//     Rises AND falls; NEVER shown to the player.
+//   - PublicRating — shown to the player and only ever GROWS. Every match awards
+//     a small amount by result × opponent strength (win > any loss;
+//     loss-to-strong > loss-to-weak), so progress never goes back.
+//
+// Ранги (звания) are thresholds on PublicRating; a rank, once reached, is never
+// lost (MaxRank). The ladder is mirrored VERBATIM in the Godot client
+// (Main.gd RANK_TIERS) — keep them in sync.
 type ratingTier struct {
-	Min   int    // overall rating needed to reach this звание
+	Min   int    // public rating needed to reach this звание
 	Title string // Russian label shown near the nickname
 }
 
 var ratingTiers = []ratingTier{
 	{0, "Котёнок"},
-	{100, "Дворовый кот"},
-	{300, "Уличный боец"},
-	{700, "Благородный кот"},
-	{1400, "Кот-рыцарь"},
-	{2500, "Барон"},
-	{4200, "Граф"},
-	{6500, "Герцог"},
-	{10000, "Кот-император"},
+	{500, "Дворовый кот"},
+	{1500, "Уличный боец"},
+	{3000, "Благородный кот"},
+	{6000, "Кот-рыцарь"},
+	{10000, "Барон"},
+	{15000, "Граф"},
+	{22000, "Герцог"},
+	{30000, "Кот-император"},
 }
 
-// tierForRating maps an overall rating to its ladder index (0..len-1).
-func tierForRating(overall int) int {
+// Rating model constants.
+const (
+	mmrDefault       = 1000 // starting hidden MMR
+	mmrK             = 32   // Elo K-factor
+	mmrEqualBand     = 200  // ±band (in MMR) that counts as an "equal" opponent
+	ratingHistoryMax = 5000 // cap on retained rating-history entries
+)
+
+// tierForRating maps a public rating to its ladder index (0..len-1).
+func tierForRating(public int) int {
 	idx := 0
 	for i, t := range ratingTiers {
-		if overall >= t.Min {
+		if public >= t.Min {
 			idx = i
 		} else {
 			break
@@ -354,17 +368,103 @@ func tierForRating(overall int) int {
 	return idx
 }
 
+// tierIndexOfName is the reverse lookup (0 if the name is unknown).
+func tierIndexOfName(name string) int {
+	for i, t := range ratingTiers {
+		if t.Title == name {
+			return i
+		}
+	}
+	return 0
+}
+
+// eloExpected is the probability `player` beats `opponent` given their MMRs.
+func eloExpected(playerMMR, oppMMR int) float64 {
+	return 1.0 / (1.0 + math.Pow(10, float64(oppMMR-playerMMR)/400.0))
+}
+
+// mmrDelta is the hidden-Elo change: K*(result - expected). Beating a stronger
+// opponent gains a lot; losing to a weaker one loses a lot.
+func mmrDelta(playerMMR, oppMMR int, win bool) int {
+	result := 0.0
+	if win {
+		result = 1.0
+	}
+	return int(math.Round(mmrK * (result - eloExpected(playerMMR, oppMMR))))
+}
+
+// oppStrength categorises the opponent by hidden MMR: -1 weaker, 0 equal, +1 stronger.
+func oppStrength(playerMMR, oppMMR int) int {
+	switch {
+	case oppMMR <= playerMMR-mmrEqualBand:
+		return -1
+	case oppMMR >= playerMMR+mmrEqualBand:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// publicPoints is the ONLY-grows public reward for a match. Any win beats any
+// loss; a loss to a stronger opponent still pays more than a loss to a weaker one.
+func publicPoints(playerMMR, oppMMR int, win bool) int {
+	switch oppStrength(playerMMR, oppMMR) {
+	case -1: // weaker opponent
+		if win {
+			return 8
+		}
+		return 1
+	case 1: // stronger opponent
+		if win {
+			return 30
+		}
+		return 6
+	default: // equal opponent
+		if win {
+			return 15
+		}
+		return 3
+	}
+}
+
 // playerRating is the persistent, cross-session glory-point record for one
 // player id. Stored in data.json under "ratings" and keyed by playerId.
 type playerRating struct {
-	PlayerID  string                     `json:"playerId"`
-	Name      string                     `json:"name"`
-	Overall   int                        `json:"overall"`
-	ByMode    map[string]int             `json:"byMode"`
-	Wins      int                        `json:"wins"`
-	Games     int                        `json:"games"`
-	UpdatedAt time.Time                  `json:"updatedAt"`
-	Extra     map[string]json.RawMessage `json:"-"` // preserve unknown fields (fwd compat)
+	PlayerID     string                     `json:"playerId"`
+	Name         string                     `json:"name"`
+	HiddenMMR    int                        `json:"hiddenMmr"`    // hidden Elo; rises & falls; NEVER sent to clients
+	PublicRating int                        `json:"publicRating"` // shown to players; only ever grows
+	Rank         string                     `json:"rank"`         // current звание name
+	MaxRank      string                     `json:"maxRank"`      // highest звание ever reached (never lowered)
+	Overall      int                        `json:"overall"`      // legacy mirror of PublicRating (kept for old readers)
+	ByMode       map[string]int             `json:"byMode"`
+	Wins         int                        `json:"wins"`
+	Games        int                        `json:"games"`
+	UpdatedAt    time.Time                  `json:"updatedAt"`
+	Extra        map[string]json.RawMessage `json:"-"` // preserve unknown fields (fwd compat)
+}
+
+// ensureRatingDefaults fills in defaults and migrates a legacy record (one that
+// only had the old glory-point "overall") to the hidden-MMR / public-rating
+// model, keeping PublicRating and the legacy Overall mirror in sync.
+func ensureRatingDefaults(pr *playerRating) {
+	if pr.HiddenMMR == 0 {
+		pr.HiddenMMR = mmrDefault
+	}
+	if pr.PublicRating == 0 && pr.Overall > 0 {
+		pr.PublicRating = pr.Overall // carry legacy glory points forward
+	}
+	pr.Overall = pr.PublicRating // keep the legacy mirror aligned
+	if pr.ByMode == nil {
+		pr.ByMode = map[string]int{}
+	}
+	name := ratingTiers[tierForRating(pr.PublicRating)].Title
+	if pr.Rank == "" {
+		pr.Rank = name
+	}
+	if pr.MaxRank == "" || tierIndexOfName(pr.MaxRank) < tierForRating(pr.PublicRating) {
+		pr.MaxRank = name
+	}
 }
 
 func (p playerRating) MarshalJSON() ([]byte, error) {
@@ -383,25 +483,45 @@ func (p *playerRating) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*p = playerRating(a)
-	p.Extra = splitExtra(data, "playerId", "name", "overall", "byMode", "wins", "games", "updatedAt")
+	p.Extra = splitExtra(data, "playerId", "name", "hiddenMmr", "publicRating",
+		"rank", "maxRank", "overall", "byMode", "wins", "games", "updatedAt")
 	return nil
 }
 
+// ratingHistoryEntry records one match's rating change for analytics/debugging.
+type ratingHistoryEntry struct {
+	PlayerID          string    `json:"playerId"`
+	OpponentID        string    `json:"opponentId"` // "field" — the FFA lobby average
+	MatchID           string    `json:"matchId"`
+	Mode              string    `json:"mode"`
+	Result            string    `json:"result"` // "win" | "loss"
+	OldHiddenMMR      int       `json:"oldHiddenMmr"`
+	NewHiddenMMR      int       `json:"newHiddenMmr"`
+	HiddenMMRDelta    int       `json:"hiddenMmrDelta"`
+	OldPublicRating   int       `json:"oldPublicRating"`
+	NewPublicRating   int       `json:"newPublicRating"`
+	PublicRatingDelta int       `json:"publicRatingDelta"`
+	OldRank           string    `json:"oldRank"`
+	NewRank           string    `json:"newRank"`
+	CreatedAt         time.Time `json:"createdAt"`
+}
+
 type playerState struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	Ready     bool    `json:"ready"`
-	Alive     bool    `json:"alive"`
-	X         float64 `json:"x"`
-	Y         float64 `json:"y"`
-	Size      float64 `json:"size"`
-	Facing    int     `json:"facing"`
-	Moving    bool    `json:"moving"`
-	WalkCycle float64 `json:"walkCycle"`
-	StepAccum float64 `json:"stepAccumulator"`
-	Score     int     `json:"score"`
-	Rating    int     `json:"rating"` // persistent overall glory points (cross-session)
-	Tier      int     `json:"tier"`   // rank-ladder index for Rating (звание)
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	Ready      bool    `json:"ready"`
+	Alive      bool    `json:"alive"`
+	X          float64 `json:"x"`
+	Y          float64 `json:"y"`
+	Size       float64 `json:"size"`
+	Facing     int     `json:"facing"`
+	Moving     bool    `json:"moving"`
+	WalkCycle  float64 `json:"walkCycle"`
+	StepAccum  float64 `json:"stepAccumulator"`
+	Score      int     `json:"score"`
+	Rating     int     `json:"rating"`     // public rating (only grows); cross-session
+	Tier       int     `json:"tier"`       // rank-ladder index for Rating (звание)
+	RatingGain int     `json:"ratingGain"` // public points earned in the just-finished match
 	// Cumulative per-session stats for the end-of-round results screen. They
 	// PERSIST across rounds within one room join and reset only on a fresh join
 	// (re-entering from the hub) — deliberately NOT reset in beginRoundLocked.
