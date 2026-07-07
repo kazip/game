@@ -1,6 +1,101 @@
 package main
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
+
+// ─── Persistent storage (forward/backward compatible) ───────────────────────
+// All durable data lives in a single versioned JSON envelope on a persistent
+// volume (see resolveDataPath / persistLocked). Compatibility rules, enforced by
+// the helpers below:
+//   - BACKWARD compat — new code reads old files: bump storageVersion and add a
+//     migration block in migrateEnvelope; old files (Version 0, no field) migrate
+//     up. Missing fields simply decode to their zero value.
+//   - FORWARD compat — OLD code reads NEW files without data loss: unknown keys
+//     are captured into an `Extra` bag on load and re-emitted on save, both at
+//     the document level (storeEnvelope) and per record (catProfile,
+//     playerRating). NEVER remove or repurpose an existing JSON field — schema
+//     changes must be additive only.
+const storageVersion = 1
+
+// foldExtra merges preserved unknown keys into an already-marshalled object,
+// without overwriting keys the object itself produced. Round-trips fields a
+// newer server wrote through an older server's load→save cycle.
+func foldExtra(base []byte, extra map[string]json.RawMessage) ([]byte, error) {
+	if len(extra) == 0 {
+		return base, nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(base, &m); err != nil {
+		return base, err
+	}
+	for k, v := range extra {
+		if _, exists := m[k]; !exists {
+			m[k] = v
+		}
+	}
+	return json.Marshal(m)
+}
+
+// splitExtra returns the keys of data that are NOT in `known` — the unknown
+// fields to preserve for forward compatibility (nil if there are none).
+func splitExtra(data []byte, known ...string) map[string]json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(data, &m) != nil {
+		return nil
+	}
+	for _, k := range known {
+		delete(m, k)
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
+// storeEnvelope is the whole on-disk document. Extra preserves unknown top-level
+// collections a future server might add (e.g. "achievements").
+type storeEnvelope struct {
+	Version int                        `json:"version"`
+	Cats    map[string]catProfile      `json:"cats"`
+	Scores  []scoreEntry               `json:"scores"`
+	Reports []reportEntry              `json:"reports"`
+	Ratings map[string]*playerRating   `json:"ratings"`
+	Extra   map[string]json.RawMessage `json:"-"`
+}
+
+func (e storeEnvelope) MarshalJSON() ([]byte, error) {
+	type alias storeEnvelope // shed methods to avoid recursion; drops Extra (json:"-")
+	b, err := json.Marshal(alias(e))
+	if err != nil {
+		return nil, err
+	}
+	return foldExtra(b, e.Extra)
+}
+
+func (e *storeEnvelope) UnmarshalJSON(data []byte) error {
+	type alias storeEnvelope
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*e = storeEnvelope(a)
+	e.Extra = splitExtra(data, "version", "cats", "scores", "reports", "ratings")
+	return nil
+}
+
+// migrateEnvelope upgrades an older on-disk schema to storageVersion in place.
+// Add one block per version bump; keep them additive so older servers can still
+// read the result (see the compatibility rules above).
+func migrateEnvelope(e *storeEnvelope) {
+	if e.Version < 1 {
+		// v0 (original, unversioned) → v1: the {cats,scores,reports,ratings}
+		// shape already maps directly; just stamp the version.
+		e.Version = 1
+	}
+	// if e.Version < 2 { …migrate…; e.Version = 2 }
+}
 
 const (
 	worldSize             = 500.0
@@ -187,9 +282,30 @@ type vector struct {
 type catAppearance map[string]any
 
 type catProfile struct {
-	PlayerID   string        `json:"playerId"`
-	Name       string        `json:"name"`
-	Appearance catAppearance `json:"appearance"`
+	PlayerID   string                     `json:"playerId"`
+	Name       string                     `json:"name"`
+	Appearance catAppearance              `json:"appearance"`
+	Extra      map[string]json.RawMessage `json:"-"` // preserve unknown fields (fwd compat)
+}
+
+func (p catProfile) MarshalJSON() ([]byte, error) {
+	type alias catProfile
+	b, err := json.Marshal(alias(p))
+	if err != nil {
+		return nil, err
+	}
+	return foldExtra(b, p.Extra)
+}
+
+func (p *catProfile) UnmarshalJSON(data []byte) error {
+	type alias catProfile
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*p = catProfile(a)
+	p.Extra = splitExtra(data, "playerId", "name", "appearance")
+	return nil
 }
 
 type scoreEntry struct {
@@ -240,13 +356,34 @@ func tierForRating(overall int) int {
 // playerRating is the persistent, cross-session glory-point record for one
 // player id. Stored in data.json under "ratings" and keyed by playerId.
 type playerRating struct {
-	PlayerID  string         `json:"playerId"`
-	Name      string         `json:"name"`
-	Overall   int            `json:"overall"`
-	ByMode    map[string]int `json:"byMode"`
-	Wins      int            `json:"wins"`
-	Games     int            `json:"games"`
-	UpdatedAt time.Time      `json:"updatedAt"`
+	PlayerID  string                     `json:"playerId"`
+	Name      string                     `json:"name"`
+	Overall   int                        `json:"overall"`
+	ByMode    map[string]int             `json:"byMode"`
+	Wins      int                        `json:"wins"`
+	Games     int                        `json:"games"`
+	UpdatedAt time.Time                  `json:"updatedAt"`
+	Extra     map[string]json.RawMessage `json:"-"` // preserve unknown fields (fwd compat)
+}
+
+func (p playerRating) MarshalJSON() ([]byte, error) {
+	type alias playerRating
+	b, err := json.Marshal(alias(p))
+	if err != nil {
+		return nil, err
+	}
+	return foldExtra(b, p.Extra)
+}
+
+func (p *playerRating) UnmarshalJSON(data []byte) error {
+	type alias playerRating
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*p = playerRating(a)
+	p.Extra = splitExtra(data, "playerId", "name", "overall", "byMode", "wins", "games", "updatedAt")
+	return nil
 }
 
 type playerState struct {

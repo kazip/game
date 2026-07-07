@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -522,7 +523,10 @@ type server struct {
 	cats           map[string]catProfile
 	scores         []scoreEntry
 	reports        []reportEntry
-	ratings        map[string]*playerRating // persistent glory points keyed by playerId
+	ratings        map[string]*playerRating   // persistent glory points keyed by playerId
+	storeExtra     map[string]json.RawMessage // unknown top-level keys, preserved (fwd compat)
+	storeVersion   int                        // schema version last seen on disk (never regress it)
+	dataPath       string                     // resolved persistent path to data.json
 	rooms          map[string]*room
 	mu             sync.Mutex
 	upgrader       websocket.Upgrader
@@ -537,9 +541,28 @@ func newServer() *server {
 		rooms:          make(map[string]*room),
 		upgrader:       websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
 		protocolBinary: binaryProtocol,
+		dataPath:       resolveDataPath(),
 	}
 	srv.loadFromDisk()
 	return srv
+}
+
+// resolveDataPath picks where the durable data file lives. Point CATGAME_DATA_DIR
+// (or DATA_DIR) at a directory on a PERSISTENT volume so the data survives
+// container redeploys; it defaults to the working directory for local dev.
+func resolveDataPath() string {
+	dir := os.Getenv("CATGAME_DATA_DIR")
+	if dir == "" {
+		dir = os.Getenv("DATA_DIR")
+	}
+	if dir == "" {
+		dir = "."
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("data: could not create dir %q: %v (falling back to .)", dir, err)
+		dir = "."
+	}
+	return filepath.Join(dir, dataFileName)
 }
 
 func (s *server) binaryProtocolEnabled() bool {
@@ -830,60 +853,82 @@ func (s *server) addReport(entry reportEntry) {
 }
 
 func (s *server) loadFromDisk() {
-	data, err := os.ReadFile(dataFileName)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("failed to read data file: %v", err)
+	data, err := os.ReadFile(s.dataPath)
+	if err != nil || len(data) == 0 || !json.Valid(data) {
+		// Primary missing/empty/corrupt — try the last-good backup so a crash
+		// mid-write (or a truncated file) never wipes accumulated data.
+		if bak, bakErr := os.ReadFile(s.dataPath + ".bak"); bakErr == nil && json.Valid(bak) {
+			log.Printf("data: primary %s unusable (%v); recovering from .bak", s.dataPath, err)
+			data = bak
+		} else {
+			if err != nil && !os.IsNotExist(err) {
+				log.Printf("data: failed to read %s: %v", s.dataPath, err)
+			}
+			return // fresh start
 		}
-		return
 	}
 
-	var payload struct {
-		Cats    map[string]catProfile    `json:"cats"`
-		Scores  []scoreEntry             `json:"scores"`
-		Reports []reportEntry            `json:"reports"`
-		Ratings map[string]*playerRating `json:"ratings"`
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		log.Printf("failed to decode data file: %v", err)
+	var env storeEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		log.Printf("data: failed to decode %s: %v", s.dataPath, err)
 		return
 	}
+	migrateEnvelope(&env)
 
-	if payload.Cats != nil {
-		s.cats = payload.Cats
+	if env.Cats != nil {
+		s.cats = env.Cats
 	}
-	if payload.Scores != nil {
-		s.scores = payload.Scores
+	if env.Scores != nil {
+		s.scores = env.Scores
 	}
-	if payload.Reports != nil {
-		s.reports = payload.Reports
+	if env.Reports != nil {
+		s.reports = env.Reports
 	}
-	if payload.Ratings != nil {
-		s.ratings = payload.Ratings
+	if env.Ratings != nil {
+		s.ratings = env.Ratings
 	}
+	s.storeExtra = env.Extra // carry unknown top-level keys forward (fwd compat)
+	s.storeVersion = env.Version
+	log.Printf("data: loaded %s (schema v%d: %d cats, %d ratings, %d scores, %d reports)",
+		s.dataPath, env.Version, len(s.cats), len(s.ratings), len(s.scores), len(s.reports))
 }
 
+// persistLocked writes the whole store atomically: encode → temp file → back up
+// the previous good copy → rename over the target. Rename is atomic on a single
+// filesystem, so a crash never leaves a half-written data file. Caller holds s.mu.
 func (s *server) persistLocked() {
-	payload := struct {
-		Cats    map[string]catProfile    `json:"cats"`
-		Scores  []scoreEntry             `json:"scores"`
-		Reports []reportEntry            `json:"reports"`
-		Ratings map[string]*playerRating `json:"ratings"`
-	}{
+	// Never regress the version marker: a newer file round-tripped through this
+	// (older) server keeps its higher version — its extra fields are preserved,
+	// so the data really is still that newer schema.
+	version := storageVersion
+	if s.storeVersion > version {
+		version = s.storeVersion
+	}
+	env := storeEnvelope{
+		Version: version,
 		Cats:    s.cats,
 		Scores:  s.scores,
 		Reports: s.reports,
 		Ratings: s.ratings,
+		Extra:   s.storeExtra,
 	}
-
-	data, err := json.MarshalIndent(payload, "", "  ")
+	data, err := json.MarshalIndent(env, "", "  ")
 	if err != nil {
-		log.Printf("failed to encode data file: %v", err)
+		log.Printf("data: failed to encode: %v", err)
 		return
 	}
 
-	if err := os.WriteFile(dataFileName, data, 0o644); err != nil {
-		log.Printf("failed to write data file: %v", err)
+	tmp := s.dataPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		log.Printf("data: failed to write %s: %v", tmp, err)
+		return
+	}
+	// Keep the last good copy as a backup before the atomic replace.
+	if cur, rerr := os.ReadFile(s.dataPath); rerr == nil && len(cur) > 0 {
+		_ = os.WriteFile(s.dataPath+".bak", cur, 0o644)
+	}
+	if err := os.Rename(tmp, s.dataPath); err != nil {
+		log.Printf("data: failed to commit %s: %v", s.dataPath, err)
 	}
 }
 
