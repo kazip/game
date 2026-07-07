@@ -549,6 +549,9 @@ type playerState struct {
 	Appearance        catAppearance `json:"appearance"`
 	Disguise          string        `json:"disguise,omitempty"`
 	Zombie            bool          `json:"zombie,omitempty"`
+	// Joined mid-round: watches this round, auto-promoted to a player at the next
+	// beginRoundLocked. Excluded from all gameplay + the ready gate while true.
+	Spectator bool `json:"spectator,omitempty"`
 	// Internal shooter timers (not serialized).
 	ShootCD    float64 `json:"-"`
 	RegenDelay float64 `json:"-"`
@@ -701,6 +704,7 @@ type playerPatch struct {
 	Appearance catAppearance `json:"appearance,omitempty"`
 	Disguise   *string       `json:"disguise,omitempty"`
 	Zombie     *bool         `json:"zombie,omitempty"`
+	Spectator  *bool         `json:"spectator,omitempty"`
 }
 
 type statePatch struct {

@@ -281,7 +281,7 @@ func (r *room) snapshotLocked() gameState {
 }
 
 func (p playerPatch) isEmpty() bool {
-	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && p.Rating == nil && p.Tier == nil && p.Health == nil && p.Weapon == nil && p.Ammo == nil && p.Armor == nil && len(p.Appearance) == 0 && p.Disguise == nil && p.Zombie == nil
+	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && p.Rating == nil && p.Tier == nil && p.Health == nil && p.Weapon == nil && p.Ammo == nil && p.Armor == nil && len(p.Appearance) == 0 && p.Disguise == nil && p.Zombie == nil && p.Spectator == nil
 }
 
 func buildPlayerPatch(previous, current *playerState) *playerPatch {
@@ -349,6 +349,9 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 	}
 	if previous == nil || previous.Zombie != current.Zombie {
 		patch.Zombie = boolPtr(current.Zombie)
+	}
+	if previous == nil || previous.Spectator != current.Spectator {
+		patch.Spectator = boolPtr(current.Spectator)
 	}
 	if patch.isEmpty() {
 		return nil
@@ -1548,6 +1551,12 @@ func (r *room) ensurePlayer(id, name string) *playerState {
 			spawnX, spawnY = hubWorldW/2, hubWorldH/2 // centre of the plaza
 		}
 		player = &playerState{ID: id, Name: fallbackName(name), Size: catSize, X: spawnX, Y: spawnY, Facing: 1}
+		// Joined while a round is in progress (or its results are up): spectate now,
+		// auto-promote to a player at the next beginRoundLocked. Alive stays false so
+		// every Alive-gated gameplay loop already skips them.
+		if r.roomType != hubMode && (r.state.Phase == "playing" || r.state.Phase == "ended") {
+			player.Spectator = true
+		}
 		r.players[id] = player
 	}
 	if name != "" {
@@ -1724,11 +1733,12 @@ func (r *room) beginRoundLocked() {
 	r.ratingAwarded = false
 	r.resultsDelay = 0
 	r.resetBombPassHistoryLocked()
-	// Revive everyone BEFORE any mode picks its random "it": otherwise the pool
-	// is only whoever survived the last round (e.g. the hide-and-seek seeker,
-	// who never dies), and that player gets re-picked as leader every time.
+	// Revive everyone AND promote spectators to full players BEFORE any mode picks
+	// its random "it": otherwise the pool is only whoever survived the last round
+	// (e.g. the hide-and-seek seeker), and a spectator could be picked as leader.
 	for _, p := range r.players {
 		p.Alive = true
+		p.Spectator = false
 	}
 	if r.isBombMode() {
 		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
@@ -1836,12 +1846,18 @@ func (r *room) endRoundLocked(reason string) {
 		if w := r.players[r.state.WinnerID]; w != nil {
 			w.RoundWins++
 		}
-		if r.roomType != hubMode && len(r.players) >= 2 {
+		if r.roomType != hubMode {
+			// Only players who actually took part are rated — spectators excluded.
 			parts := make([]ratingParticipant, 0, len(r.players))
 			for id, p := range r.players {
+				if p.Spectator {
+					continue
+				}
 				parts = append(parts, ratingParticipant{ID: id, Name: p.Name, Winner: id == r.state.WinnerID})
 			}
-			go r.awardRatings(parts, r.state.Mode)
+			if len(parts) >= 2 {
+				go r.awardRatings(parts, r.state.Mode)
+			}
 		}
 	}
 
@@ -1868,6 +1884,9 @@ func (r *room) bestPlayerIDLocked() string {
 			// Zombies won: highlight the top infector.
 			var best *playerState
 			for _, p := range r.players {
+				if p.Spectator {
+					continue
+				}
 				if best == nil || p.Score > best.Score {
 					best = p
 				}
@@ -1878,7 +1897,7 @@ func (r *room) bestPlayerIDLocked() string {
 		} else {
 			// Survivors won: highlight any remaining human.
 			for _, p := range r.players {
-				if !p.Zombie {
+				if !p.Spectator && !p.Zombie {
 					return p.ID
 				}
 			}
@@ -1916,6 +1935,9 @@ func (r *room) bestPlayerIDLocked() string {
 		}
 	}
 	for _, p := range r.players {
+		if p.Spectator {
+			continue
+		}
 		if best == nil || p.Score > best.Score {
 			best = p
 		}
@@ -2373,6 +2395,9 @@ func (r *room) handleZombieInfectionsLocked() {
 	zombies := make([]*playerState, 0, len(r.players))
 	humans := make([]*playerState, 0, len(r.players))
 	for _, p := range r.players {
+		if p.Spectator {
+			continue // spectators aren't infectable and aren't zombies
+		}
 		if p.Zombie {
 			zombies = append(zombies, p)
 		} else {
@@ -2427,17 +2452,20 @@ func (r *room) zombieSpeedMultLocked() float64 {
 	return mult
 }
 
-// allZombiesLocked reports whether every player in the room is a zombie.
+// allZombiesLocked reports whether every ACTIVE player (spectators excluded) is a
+// zombie. Spectators are never zombies and must not block the win condition.
 func (r *room) allZombiesLocked() bool {
-	if len(r.players) == 0 {
-		return false
-	}
+	active := 0
 	for _, p := range r.players {
+		if p.Spectator {
+			continue
+		}
+		active++
 		if !p.Zombie {
 			return false
 		}
 	}
-	return true
+	return active > 0
 }
 
 // pickLeaderLocked chooses the round's "it" (seeker / zombie zero / first bomb
@@ -3041,13 +3069,18 @@ func (r *room) updateLobbyMessageLocked() {
 	if r.state.Phase == "ended" && r.resultsDelay > 0 {
 		return
 	}
-	readyCount := 0
+	// Spectators (joined mid-round) don't count toward the ready gate — they'd
+	// otherwise block the next round from ever starting.
+	readyCount, total := 0, 0
 	for _, p := range r.players {
+		if p.Spectator {
+			continue
+		}
+		total++
 		if p.Ready {
 			readyCount++
 		}
 	}
-	total := len(r.players)
 	if total == 0 {
 		r.state.Message = "Ожидаем игроков"
 		return
