@@ -153,6 +153,7 @@ const (
 	bombTimerBonus        = 10.0
 	dataFileName          = "data.json"
 	reconnectGrace        = 10 * time.Second
+	resultsWindowSecs     = 30.0 // how long the end-of-round results table stays up
 
 	// ─── Hub / room-tree ────────────────────────────────────────────────
 	hubMode       = "hub" // a free-roam social room, no game logic
@@ -387,27 +388,39 @@ func (p *playerRating) UnmarshalJSON(data []byte) error {
 }
 
 type playerState struct {
-	ID         string        `json:"id"`
-	Name       string        `json:"name"`
-	Ready      bool          `json:"ready"`
-	Alive      bool          `json:"alive"`
-	X          float64       `json:"x"`
-	Y          float64       `json:"y"`
-	Size       float64       `json:"size"`
-	Facing     int           `json:"facing"`
-	Moving     bool          `json:"moving"`
-	WalkCycle  float64       `json:"walkCycle"`
-	StepAccum  float64       `json:"stepAccumulator"`
-	Score      int           `json:"score"`
-	Rating     int           `json:"rating"` // persistent overall glory points (cross-session)
-	Tier       int           `json:"tier"`   // rank-ladder index for Rating (звание)
-	Health     int           `json:"health"`
-	Weapon     string        `json:"weapon,omitempty"`
-	Ammo       int           `json:"ammo"`
-	Armor      int           `json:"armor"`
-	Appearance catAppearance `json:"appearance"`
-	Disguise   string        `json:"disguise,omitempty"`
-	Zombie     bool          `json:"zombie,omitempty"`
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Ready     bool    `json:"ready"`
+	Alive     bool    `json:"alive"`
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
+	Size      float64 `json:"size"`
+	Facing    int     `json:"facing"`
+	Moving    bool    `json:"moving"`
+	WalkCycle float64 `json:"walkCycle"`
+	StepAccum float64 `json:"stepAccumulator"`
+	Score     int     `json:"score"`
+	Rating    int     `json:"rating"` // persistent overall glory points (cross-session)
+	Tier      int     `json:"tier"`   // rank-ladder index for Rating (звание)
+	// Cumulative per-session stats for the end-of-round results screen. They
+	// PERSIST across rounds within one room join and reset only on a fresh join
+	// (re-entering from the hub) — deliberately NOT reset in beginRoundLocked.
+	// They reach clients via the full snapshot forced at round end, so they need
+	// no incremental-patch plumbing.
+	Kills        int           `json:"kills"`
+	Deaths       int           `json:"deaths"`
+	FishCaught   int           `json:"fishCaught"`
+	BombCarries  int           `json:"bombCarries"`
+	BombPasses   int           `json:"bombPasses"`
+	BombHoldTime float64       `json:"bombHoldTime"`
+	RoundWins    int           `json:"roundWins"`
+	Health       int           `json:"health"`
+	Weapon       string        `json:"weapon,omitempty"`
+	Ammo         int           `json:"ammo"`
+	Armor        int           `json:"armor"`
+	Appearance   catAppearance `json:"appearance"`
+	Disguise     string        `json:"disguise,omitempty"`
+	Zombie       bool          `json:"zombie,omitempty"`
 	// Internal shooter timers (not serialized).
 	ShootCD    float64 `json:"-"`
 	RegenDelay float64 `json:"-"`

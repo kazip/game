@@ -516,7 +516,8 @@ type room struct {
 	shootingUnlocked   bool
 	endDelay           float64 // shooters: grace before results so the last shot is seen/heard
 	endReason          string
-	ratingAwarded      bool // glory points already granted for the current round
+	ratingAwarded      bool    // glory points already granted for the current round
+	resultsDelay       float64 // seconds left on the end-of-round results window (0 = closed)
 }
 
 type server struct {
@@ -1607,6 +1608,19 @@ func (r *room) step() {
 				r.endRoundLocked("Раунд завершён")
 			}
 		}
+	case "ended":
+		// Hold the results table open for a readable window before the lobby is
+		// allowed to re-arm the next-round countdown. Remaining mirrors the
+		// window so the client can render a "следующий раунд через Xс" timer.
+		if r.resultsDelay > 0 {
+			r.resultsDelay -= tickRate.Seconds()
+			if r.resultsDelay < 0 {
+				r.resultsDelay = 0
+			}
+			r.state.Remaining = r.resultsDelay
+			return
+		}
+		r.updateLobbyMessageLocked()
 	default:
 		r.updateLobbyMessageLocked()
 	}
@@ -1631,6 +1645,7 @@ func (r *room) beginRoundLocked() {
 	r.endDelay = 0
 	r.endReason = ""
 	r.ratingAwarded = false
+	r.resultsDelay = 0
 	r.resetBombPassHistoryLocked()
 	// Revive everyone BEFORE any mode picks its random "it": otherwise the pool
 	// is only whoever survived the last round (e.g. the hide-and-seek seeker,
@@ -1732,6 +1747,10 @@ func (r *room) endRoundLocked(reason string) {
 	// never nests s.mu inside r.mu (see awardRatings).
 	if !r.ratingAwarded {
 		r.ratingAwarded = true
+		// Session round-win tally for the results screen.
+		if w := r.players[r.state.WinnerID]; w != nil {
+			w.RoundWins++
+		}
 		if r.roomType != hubMode && len(r.players) >= 2 {
 			parts := make([]ratingParticipant, 0, len(r.players))
 			for id, p := range r.players {
@@ -1740,6 +1759,12 @@ func (r *room) endRoundLocked(reason string) {
 			go r.awardRatings(parts, r.state.Mode)
 		}
 	}
+
+	// Open the results window and force a full snapshot on the next broadcast so
+	// the cumulative per-session stats (which don't ride incremental patches)
+	// reach every client for the results table.
+	r.resultsDelay = resultsWindowSecs
+	r.lastBroadcastState = nil
 }
 
 // beginEndDelayLocked schedules the round to end after a short grace so the last
@@ -2029,6 +2054,7 @@ func (r *room) updatePlayersLocked() {
 			if math.Hypot(p.X-m.X, p.Y-m.Y) < (p.Size+m.Size)/2 {
 				p.Alive = false
 				p.Moving = false
+				p.Deaths++
 				break
 			}
 		}
@@ -2213,6 +2239,7 @@ func (r *room) assignBombLocked(id string, resetTimer bool) {
 	}
 	r.applyBombSlowdownLocked(id)
 	if p, ok := r.players[id]; ok {
+		p.BombCarries++ // became the holder (round-start or mid-round reassign)
 		r.state.Message = fmt.Sprintf("Бомба у %s!", fallbackName(p.Name))
 	}
 }
@@ -2240,6 +2267,8 @@ func (r *room) handleBombTransferLocked() {
 			r.state.BombHolder = p.ID
 			r.state.BombTimer = math.Max(r.state.BombTimer, 0) + bombTimerBonus
 			r.applyBombSlowdownLocked(p.ID)
+			holder.BombPasses++ // passed the bomb away
+			p.BombCarries++     // received it (now carrying)
 			r.lastBombPassFrom = holder.ID
 			r.lastBombPassTo = p.ID
 			r.lastBombPassAt = time.Now()
@@ -2268,7 +2297,9 @@ func (r *room) handleZombieInfectionsLocked() {
 			}
 			if math.Hypot(z.X-h.X, z.Y-h.Y) < zombieTouchDist {
 				h.Zombie = true
+				h.Deaths++ // infected — counts as an elimination this round
 				z.Score++
+				z.Kills++
 				r.state.Message = fmt.Sprintf("%s заражён!", fallbackName(h.Name))
 			}
 		}
@@ -2602,7 +2633,9 @@ func (r *room) resolveShooterCombatLocked() {
 				target.Health = 0
 				target.Alive = false
 				target.Moving = false
+				target.Deaths++
 				shooter.Score++
+				shooter.Kills++
 				r.state.Message = fmt.Sprintf("%s выбил %s", fallbackName(shooter.Name), fallbackName(target.Name))
 			}
 		}
@@ -2685,7 +2718,9 @@ func (r *room) handleHideSeekCapturesLocked() {
 			player.Moving = false
 			player.Disguise = ""
 			player.Size = catSize
+			player.Deaths++
 			seeker.Score++
+			seeker.Kills++
 			remaining := r.countRemainingHidersLocked()
 			if remaining == 0 {
 				r.state.WinnerID = seeker.ID
@@ -2720,6 +2755,9 @@ func (r *room) updateBombPassLocked() {
 		r.assignBombToRandomAliveLocked(true)
 	}
 	r.handleBombTransferLocked()
+	if h := r.players[r.state.BombHolder]; h != nil && h.Alive {
+		h.BombHoldTime += tickRate.Seconds() // accumulate time spent holding the bomb
+	}
 	r.state.BombTimer -= tickRate.Seconds()
 	if r.state.BombTimer < 0 {
 		r.state.BombTimer = 0
@@ -2734,6 +2772,7 @@ func (r *room) updateBombPassLocked() {
 	if holder != nil && holder.Alive && r.state.BombTimer <= 0 {
 		holder.Alive = false
 		holder.Moving = false
+		holder.Deaths++
 		r.state.Message = fmt.Sprintf("%s не успел избавиться от бомбы!", fallbackName(holder.Name))
 		r.state.BombHolder = ""
 		r.state.BombTimer = bombTimerDuration
@@ -2771,6 +2810,7 @@ func (r *room) updateFishLocked() {
 		dist := math.Hypot(p.X-r.state.Fish.X, p.Y-r.state.Fish.Y)
 		if dist <= fishCatchDistance {
 			p.Score += 1
+			p.FishCaught++
 			r.spawnFishLocked()
 			break
 		}
@@ -2896,6 +2936,11 @@ func (r *room) updateLobbyMessageLocked() {
 	// Hubs are free-roam drop-in spaces: no ready gate, no lobby/countdown.
 	// Never let a ready flag flip the hub out of its "hub" phase.
 	if r.roomType == hubMode {
+		return
+	}
+	// Hold the results window: while it's counting down, don't let a ready flag
+	// (e.g. toggled from the lobby) re-arm the next round early.
+	if r.state.Phase == "ended" && r.resultsDelay > 0 {
 		return
 	}
 	readyCount := 0
