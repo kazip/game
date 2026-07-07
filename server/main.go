@@ -280,7 +280,7 @@ func (r *room) snapshotLocked() gameState {
 }
 
 func (p playerPatch) isEmpty() bool {
-	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && p.Health == nil && p.Weapon == nil && p.Ammo == nil && p.Armor == nil && len(p.Appearance) == 0 && p.Disguise == nil && p.Zombie == nil
+	return p.Name == nil && p.Ready == nil && p.Alive == nil && p.X == nil && p.Y == nil && p.Size == nil && p.Facing == nil && p.Moving == nil && p.WalkCycle == nil && p.StepAccum == nil && p.Score == nil && p.Rating == nil && p.Tier == nil && p.Health == nil && p.Weapon == nil && p.Ammo == nil && p.Armor == nil && len(p.Appearance) == 0 && p.Disguise == nil && p.Zombie == nil
 }
 
 func buildPlayerPatch(previous, current *playerState) *playerPatch {
