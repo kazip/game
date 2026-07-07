@@ -1314,7 +1314,10 @@ func (r *room) handleConnection(conn *websocket.Conn, playerID, playerName strin
 				if pid, vec, shoot := decodeInputBuffer(data); pid != nil && vec != nil {
 					r.mu.Lock()
 					r.inputs[*pid] = *vec
-					if shoot != nil && *shoot {
+					// Ignore shoot presses while shooting is locked (prep phase),
+					// otherwise a press made during the ban stays queued and fires
+					// the instant shooting unlocks.
+					if shoot != nil && *shoot && r.shootingUnlocked {
 						r.shootRequests[*pid] = true
 					}
 					r.mu.Unlock()
@@ -1340,7 +1343,10 @@ func (r *room) handleClientMessage(playerID string, msg wsMessage) {
 		if msg.Vector != nil {
 			r.mu.Lock()
 			r.inputs[playerID] = *msg.Vector
-			if msg.Shoot != nil && *msg.Shoot {
+			// Ignore shoot presses while shooting is locked (prep phase), otherwise
+			// a press made during the ban stays queued and fires the instant
+			// shooting unlocks.
+			if msg.Shoot != nil && *msg.Shoot && r.shootingUnlocked {
 				r.shootRequests[playerID] = true
 			}
 			r.mu.Unlock()
