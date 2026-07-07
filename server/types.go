@@ -200,6 +200,55 @@ type scoreEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// ─── Player rating / ранги (звания) ─────────────────────────────────────────
+// Accumulating "glory points": a player's rating only ever GROWS. Winning a
+// round pays more when the beaten field is higher-rated than you (ELO expected
+// score); losing still trickles a few participation points. Overall rating is
+// the sum of the per-mode totals; ранги (звания) are thresholds on the overall.
+// The ladder below is mirrored VERBATIM in the Godot client (Main.gd RANK_TIERS)
+// so both sides render the same звание — keep them in sync.
+type ratingTier struct {
+	Min   int    // overall rating needed to reach this звание
+	Title string // Russian label shown near the nickname
+}
+
+var ratingTiers = []ratingTier{
+	{0, "Котёнок"},
+	{100, "Дворовый кот"},
+	{300, "Уличный боец"},
+	{700, "Благородный кот"},
+	{1400, "Кот-рыцарь"},
+	{2500, "Барон"},
+	{4200, "Граф"},
+	{6500, "Герцог"},
+	{10000, "Кот-император"},
+}
+
+// tierForRating maps an overall rating to its ladder index (0..len-1).
+func tierForRating(overall int) int {
+	idx := 0
+	for i, t := range ratingTiers {
+		if overall >= t.Min {
+			idx = i
+		} else {
+			break
+		}
+	}
+	return idx
+}
+
+// playerRating is the persistent, cross-session glory-point record for one
+// player id. Stored in data.json under "ratings" and keyed by playerId.
+type playerRating struct {
+	PlayerID  string         `json:"playerId"`
+	Name      string         `json:"name"`
+	Overall   int            `json:"overall"`
+	ByMode    map[string]int `json:"byMode"`
+	Wins      int            `json:"wins"`
+	Games     int            `json:"games"`
+	UpdatedAt time.Time      `json:"updatedAt"`
+}
+
 type playerState struct {
 	ID         string        `json:"id"`
 	Name       string        `json:"name"`
@@ -213,6 +262,8 @@ type playerState struct {
 	WalkCycle  float64       `json:"walkCycle"`
 	StepAccum  float64       `json:"stepAccumulator"`
 	Score      int           `json:"score"`
+	Rating     int           `json:"rating"` // persistent overall glory points (cross-session)
+	Tier       int           `json:"tier"`   // rank-ladder index for Rating (звание)
 	Health     int           `json:"health"`
 	Weapon     string        `json:"weapon,omitempty"`
 	Ammo       int           `json:"ammo"`
@@ -363,6 +414,8 @@ type playerPatch struct {
 	WalkCycle  *float64      `json:"walkCycle,omitempty"`
 	StepAccum  *float64      `json:"stepAccumulator,omitempty"`
 	Score      *int          `json:"score,omitempty"`
+	Rating     *int          `json:"rating,omitempty"`
+	Tier       *int          `json:"tier,omitempty"`
 	Health     *int          `json:"health,omitempty"`
 	Weapon     *string       `json:"weapon,omitempty"`
 	Ammo       *int          `json:"ammo,omitempty"`

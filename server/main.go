@@ -320,6 +320,12 @@ func buildPlayerPatch(previous, current *playerState) *playerPatch {
 	if previous == nil || previous.Score != current.Score {
 		patch.Score = intPtr(current.Score)
 	}
+	if previous == nil || previous.Rating != current.Rating {
+		patch.Rating = intPtr(current.Rating)
+	}
+	if previous == nil || previous.Tier != current.Tier {
+		patch.Tier = intPtr(current.Tier)
+	}
 	if previous == nil || previous.Health != current.Health {
 		patch.Health = intPtr(current.Health)
 	}
@@ -509,12 +515,14 @@ type room struct {
 	shootingUnlocked   bool
 	endDelay           float64 // shooters: grace before results so the last shot is seen/heard
 	endReason          string
+	ratingAwarded      bool // glory points already granted for the current round
 }
 
 type server struct {
 	cats           map[string]catProfile
 	scores         []scoreEntry
 	reports        []reportEntry
+	ratings        map[string]*playerRating // persistent glory points keyed by playerId
 	rooms          map[string]*room
 	mu             sync.Mutex
 	upgrader       websocket.Upgrader
@@ -525,6 +533,7 @@ func newServer() *server {
 	binaryProtocol := parseBoolEnv("BINARY_PROTOCOL_ENABLED")
 	srv := &server{
 		cats:           make(map[string]catProfile),
+		ratings:        make(map[string]*playerRating),
 		rooms:          make(map[string]*room),
 		upgrader:       websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
 		protocolBinary: binaryProtocol,
@@ -830,9 +839,10 @@ func (s *server) loadFromDisk() {
 	}
 
 	var payload struct {
-		Cats    map[string]catProfile `json:"cats"`
-		Scores  []scoreEntry          `json:"scores"`
-		Reports []reportEntry         `json:"reports"`
+		Cats    map[string]catProfile    `json:"cats"`
+		Scores  []scoreEntry             `json:"scores"`
+		Reports []reportEntry            `json:"reports"`
+		Ratings map[string]*playerRating `json:"ratings"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		log.Printf("failed to decode data file: %v", err)
@@ -848,17 +858,22 @@ func (s *server) loadFromDisk() {
 	if payload.Reports != nil {
 		s.reports = payload.Reports
 	}
+	if payload.Ratings != nil {
+		s.ratings = payload.Ratings
+	}
 }
 
 func (s *server) persistLocked() {
 	payload := struct {
-		Cats    map[string]catProfile `json:"cats"`
-		Scores  []scoreEntry          `json:"scores"`
-		Reports []reportEntry         `json:"reports"`
+		Cats    map[string]catProfile    `json:"cats"`
+		Scores  []scoreEntry             `json:"scores"`
+		Reports []reportEntry            `json:"reports"`
+		Ratings map[string]*playerRating `json:"ratings"`
 	}{
 		Cats:    s.cats,
 		Scores:  s.scores,
 		Reports: s.reports,
+		Ratings: s.ratings,
 	}
 
 	data, err := json.MarshalIndent(payload, "", "  ")
@@ -887,6 +902,99 @@ func (s *server) topScores(limit int, mode string) []scoreEntry {
 		}
 	}
 	return out
+}
+
+// ratingFor returns a player's persistent overall rating and rank-tier index.
+// Unknown players start at (0, 0) — Котёнок. Takes s.mu; call with NO room lock
+// held (global order is s.mu before r.mu).
+func (s *server) ratingFor(id string) (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if pr, ok := s.ratings[id]; ok {
+		return pr.Overall, tierForRating(pr.Overall)
+	}
+	return 0, 0
+}
+
+// ratingParticipant is a round-end snapshot of one cat, captured under r.mu and
+// handed to the async award so the award never holds r.mu and s.mu together.
+type ratingParticipant struct {
+	ID     string
+	Name   string
+	Winner bool
+}
+
+// awardRatings updates persistent glory points after a round. It runs in its own
+// goroutine (spawned from endRoundLocked) so it can take s.mu and, separately,
+// the room's mu WITHOUT ever nesting them — it holds each on its own, honouring
+// the global s.mu-before-r.mu order. Winners gain more for beating a
+// higher-rated field (ELO expected score); everyone gets a small participation
+// trickle. Points only ever grow.
+func (r *room) awardRatings(parts []ratingParticipant, mode string) {
+	s := r.server
+	s.mu.Lock()
+	// Snapshot current overall ratings for the expected-score math.
+	cur := make(map[string]int, len(parts))
+	total := 0
+	for _, p := range parts {
+		ov := 0
+		if pr, ok := s.ratings[p.ID]; ok {
+			ov = pr.Overall
+		}
+		cur[p.ID] = ov
+		total += ov
+	}
+	updated := make(map[string]int, len(parts)) // id -> new overall
+	for _, p := range parts {
+		own := cur[p.ID]
+		// Average rating of the OTHER cats — the field this player faced.
+		avgOpp := own
+		if len(parts) > 1 {
+			avgOpp = (total - own) / (len(parts) - 1)
+		}
+		// ELO expected score: chance THIS cat was "supposed" to win vs the field.
+		e := 1.0 / (1.0 + math.Pow(10, float64(avgOpp-own)/400.0))
+		var gain int
+		if p.Winner {
+			gain = 20 + int(math.Round(30*(1-e))) // ~20 (weak field) … ~50 (strong)
+		} else {
+			gain = 3 + int(math.Round(5*(1-e))) // small participation trickle
+		}
+		if gain < 1 {
+			gain = 1
+		}
+		pr, ok := s.ratings[p.ID]
+		if !ok {
+			pr = &playerRating{PlayerID: p.ID, ByMode: map[string]int{}}
+			s.ratings[p.ID] = pr
+		}
+		if pr.ByMode == nil {
+			pr.ByMode = map[string]int{}
+		}
+		if p.Name != "" {
+			pr.Name = p.Name
+		}
+		pr.Overall += gain
+		pr.ByMode[mode] += gain
+		pr.Games++
+		if p.Winner {
+			pr.Wins++
+		}
+		pr.UpdatedAt = time.Now()
+		updated[p.ID] = pr.Overall
+	}
+	s.persistLocked()
+	s.mu.Unlock()
+
+	// Refresh the live in-room rating/tier so the число updates without a rejoin.
+	r.mu.Lock()
+	for id, overall := range updated {
+		if p, ok := r.players[id]; ok {
+			p.Rating = overall
+			p.Tier = tierForRating(overall)
+		}
+	}
+	r.mu.Unlock()
 }
 
 // roomSummaryLocked builds the browse-list entry for a room. Caller holds s.mu.
@@ -1015,6 +1123,35 @@ func (s *server) handleScores(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleRating returns one player's persistent rating so the main menu can show
+// a звание before the player has joined any room. GET /api/rating?id=<playerId>.
+func (s *server) handleRating(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	overall, wins, games := 0, 0, 0
+	byMode := map[string]int{}
+	if pr, ok := s.ratings[id]; ok {
+		overall, wins, games = pr.Overall, pr.Wins, pr.Games
+		for m, v := range pr.ByMode {
+			byMode[m] = v
+		}
+	}
+	s.mu.Unlock()
+	tier := tierForRating(overall)
+	writeJSON(w, map[string]any{
+		"overall": overall,
+		"tier":    tier,
+		"title":   ratingTiers[tier].Title,
+		"byMode":  byMode,
+		"wins":    wins,
+		"games":   games,
+	})
+}
+
 func (s *server) handleRooms(w http.ResponseWriter, r *http.Request) {
 	hubID := r.URL.Query().Get("hub")
 	roomType := r.URL.Query().Get("type")
@@ -1095,9 +1232,14 @@ func (r *room) canJoin(playerID string) bool {
 }
 
 func (r *room) handleConnection(conn *websocket.Conn, playerID, playerName string) {
+	// Fetch the persistent rating BEFORE locking the room: ratingFor takes s.mu,
+	// and the global lock order is s.mu-before-r.mu.
+	rating, tier := r.server.ratingFor(playerID)
 	r.mu.Lock()
 	r.connections[conn] = playerID
-	_ = r.ensurePlayer(playerID, playerName)
+	p := r.ensurePlayer(playerID, playerName)
+	p.Rating = rating
+	p.Tier = tier
 	r.cancelDisconnectTimerLocked(playerID)
 	r.emptySince = time.Time{} // occupied
 	r.mu.Unlock()
@@ -1437,6 +1579,7 @@ func (r *room) beginRoundLocked() {
 	r.shootRequests = make(map[string]bool)
 	r.endDelay = 0
 	r.endReason = ""
+	r.ratingAwarded = false
 	r.resetBombPassHistoryLocked()
 	// Revive everyone BEFORE any mode picks its random "it": otherwise the pool
 	// is only whoever survived the last round (e.g. the hide-and-seek seeker,
@@ -1532,6 +1675,20 @@ func (r *room) endRoundLocked(reason string) {
 	r.state.ShootPhase = ""
 	r.shootingUnlocked = false
 	r.state.WinnerID = r.bestPlayerIDLocked()
+
+	// Grant persistent glory points exactly once per round. Skipped for the hub
+	// and for solo rooms (no real opponent to rate against). Runs async so it
+	// never nests s.mu inside r.mu (see awardRatings).
+	if !r.ratingAwarded {
+		r.ratingAwarded = true
+		if r.roomType != hubMode && len(r.players) >= 2 {
+			parts := make([]ratingParticipant, 0, len(r.players))
+			for id, p := range r.players {
+				parts = append(parts, ratingParticipant{ID: id, Name: p.Name, Winner: id == r.state.WinnerID})
+			}
+			go r.awardRatings(parts, r.state.Mode)
+		}
+	}
 }
 
 // beginEndDelayLocked schedules the round to end after a short grace so the last
@@ -3630,6 +3787,7 @@ func main() {
 
 	http.Handle("/api/cats/{id}", withCORS(http.HandlerFunc(srv.handleCats)))
 	http.Handle("/api/scores", withCORS(http.HandlerFunc(srv.handleScores)))
+	http.Handle("/api/rating", withCORS(http.HandlerFunc(srv.handleRating)))
 	http.Handle("/api/hubs", withCORS(http.HandlerFunc(srv.handleHubs)))
 	http.Handle("/api/reports", withCORS(http.HandlerFunc(srv.handleReports)))
 	http.Handle("/api/rooms", withCORS(http.HandlerFunc(srv.handleRooms)))
