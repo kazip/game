@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"catgame/protocol"
 
@@ -3183,11 +3184,46 @@ const (
 	chatMinInterval = 700 * time.Millisecond
 )
 
-// A small starter blacklist (lowercase). Extend as needed; matched anywhere in
-// the text and masked with asterisks.
-var chatBadWords = []string{
-	"хуй", "пизд", "ебан", "еблан", "бляд", "сука", "мудак", "гандон",
-	"fuck", "shit", "bitch", "asshole",
+// Profanity stems, matched as substrings of a NORMALISED form of the message so
+// common evasions are still caught: "с у к а" / "с.у.к.а" (separators stripped),
+// "сууука" (repeats collapsed), "cyka" / "xyй" / "п1зд" / "$uka" (homoglyph &
+// leet folding). Two passes: badWordsRU is matched against text folded to
+// Cyrillic; badWordsLatin against text folded to Latin (so Cyrillic-lookalike
+// spoofing of English works too). Stems are Russian ROOTS so declensions match.
+// Deliberately aggressive (the goal is fewer misses); a few rare words may be
+// over-masked (e.g. "рубля" contains "бля").
+var badWordsRU = []string{
+	"хуй", "хуя", "хуе", "хуё", "хую", "хуи", "хуйн", "хуйл", "охуе", "ахуе", "охуи", "нахуй", "похуй",
+	"пизд", "пезд",
+	"ебан", "ебал", "ебат", "ебуч", "ебут", "ебло", "ебош", "ебис", "ебыр", "ёбан", "ёбну", "ебну",
+	"выеб", "наеб", "поеб", "приеб", "отъеб", "подъеб", "съеб", "разъеб", "доеб", "уеб", "заеб", "въеб",
+	"долбоеб", "долбоёб", "долбаеб",
+	"бляд", "блят", "блях", "блеад",
+	"сука", "суки", "суке", "суку", "суко", "сучар", "сучк", "сучен", "сукин",
+	"мудак", "мудил", "мудач", "мудо",
+	"гандон", "гондон",
+	"залуп",
+	"пидор", "пидар", "пидр", "пидорас", "педик", "педри",
+	"говно", "говн", "гавно", "гавн",
+	"жоп",
+	"дроч",
+	"сран", "срал", "ссан", "обосра", "обосса",
+	"шлюх", "шлюш",
+	"мраз",
+	"уёбищ", "уебищ", "ушлёп", "ушлеп", "выблядок",
+	"пердун", "хуеп", "еблив", "распизд",
+}
+
+var badWordsLatin = []string{
+	// English
+	"fuck", "fuk", "fck", "fuq", "shit", "bitch", "biatch", "asshole", "dick",
+	"cunt", "pussy", "bastard", "whore", "slut", "motherfuck", "faggot", "nigger",
+	"nigga", "wanker", "twat", "bollocks", "prick", "dickhead", "jackass",
+	// Russian transliteration (digraph forms the Cyrillic pass can miss)
+	"suka", "cyka", "blyat", "blyad", "blya", "pizd", "pizda", "pizdec", "pizdato",
+	"huy", "huj", "ebat", "ebal", "eban", "zaebal", "zaebis", "naebal", "pohuy",
+	"nahuy", "nahui", "ohuel", "ahuel", "mudak", "gandon", "gondon", "pidor",
+	"pidoras", "dolboeb", "govno", "zalupa", "drochit", "mraz", "suchka", "ebanko",
 }
 
 // sanitizeChatText trims, strips control chars, caps length and masks profanity.
@@ -3209,33 +3245,157 @@ func sanitizeChatText(s string) string {
 	return strings.TrimSpace(maskProfanity(s))
 }
 
-// maskProfanity replaces blacklisted substrings with one asterisk per rune.
-// It works on rune slices so Cyrillic (multibyte) words mask correctly and the
-// src/low slices stay index-aligned across overlapping matches.
-func maskProfanity(s string) string {
-	src := []rune(s)
-	low := []rune(strings.ToLower(s))
-	for _, w := range chatBadWords {
-		wr := []rune(w)
-		n := len(wr)
-		if n == 0 {
+// Homoglyph / leet / transliteration folds. latinToCyr converts Latin & leet
+// characters to their Cyrillic equivalent (pass 1, Russian); cyrToLatin folds
+// Cyrillic lookalikes & leet to Latin (pass 2, English/translit).
+// Only visual homoglyphs + common leet (NOT a full transliteration — full
+// Latin/translit words are handled by the Latin pass). This keeps the Cyrillic
+// pass from turning ordinary Latin words into Russian stems.
+var latinToCyr = map[rune]rune{
+	'a': 'а', 'b': 'б', 'c': 'с', 'e': 'е', 'h': 'х', 'i': 'и', 'k': 'к', 'm': 'м',
+	'o': 'о', 'p': 'р', 't': 'т', 'x': 'х', 'y': 'у', 'z': 'з',
+	'0': 'о', '1': 'и', '3': 'е', '4': 'ч', '5': 'с', '6': 'б', '7': 'т', '8': 'в',
+	'@': 'а', '$': 'с',
+}
+var cyrToLatin = map[rune]rune{
+	'а': 'a', 'е': 'e', 'о': 'o', 'с': 'c', 'р': 'p', 'х': 'x', 'у': 'y', 'к': 'k',
+	'м': 'm', 'т': 't', 'н': 'h',
+	'0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's',
+}
+
+// canonRU folds a rune to canonical Cyrillic, or -1 to drop (separators, etc.).
+func canonRU(r rune) rune {
+	r = unicode.ToLower(r)
+	if (r >= 'а' && r <= 'я') || r == 'ё' {
+		return r
+	}
+	if c, ok := latinToCyr[r]; ok {
+		return c
+	}
+	return -1
+}
+
+// canonLatin folds a rune to canonical Latin, or -1 to drop.
+func canonLatin(r rune) rune {
+	r = unicode.ToLower(r)
+	if r >= 'a' && r <= 'z' {
+		return r
+	}
+	if c, ok := cyrToLatin[r]; ok {
+		return c
+	}
+	return -1
+}
+
+// collapseRunes removes consecutive duplicate runes (so a stem matches text whose
+// repeats were collapsed during folding).
+func collapseRunes(s string) []rune {
+	r := []rune(s)
+	out := r[:0]
+	for i, c := range r {
+		if i > 0 && out[len(out)-1] == c {
 			continue
 		}
-		for i := 0; i+n <= len(low); i++ {
-			match := true
-			for j := 0; j < n; j++ {
-				if low[i+j] != wr[j] {
-					match = false
-					break
-				}
+		out = append(out, c)
+	}
+	return out
+}
+
+// filterToken is a folded word: normalised runes plus, per rune, the original
+// indices it covers (repeats collapse several originals onto one norm rune).
+type filterToken struct {
+	norm []rune
+	orig [][]int
+}
+
+// tokenize folds src via canon and splits on separators (canon == -1), collapsing
+// repeats within a token. Runs of consecutive SINGLE-rune tokens are then merged
+// into one word, so spelled-out evasion ("с у к а", "с.у.к.а") is caught while a
+// stem can never match ACROSS a genuine word boundary ("тебе балл", "the ball").
+func tokenize(src []rune, canon func(rune) rune) []filterToken {
+	var toks []filterToken
+	cur := filterToken{}
+	flush := func() {
+		if len(cur.norm) > 0 {
+			toks = append(toks, cur)
+		}
+		cur = filterToken{}
+	}
+	for i, r := range src {
+		c := canon(r)
+		if c == -1 {
+			flush()
+			continue
+		}
+		if len(cur.norm) > 0 && cur.norm[len(cur.norm)-1] == c {
+			cur.orig[len(cur.orig)-1] = append(cur.orig[len(cur.orig)-1], i)
+			continue
+		}
+		cur.norm = append(cur.norm, c)
+		cur.orig = append(cur.orig, []int{i})
+	}
+	flush()
+
+	// Merge maximal runs of single-rune tokens.
+	var out []filterToken
+	for i := 0; i < len(toks); {
+		if len(toks[i].norm) == 1 {
+			m := filterToken{}
+			for i < len(toks) && len(toks[i].norm) == 1 {
+				m.norm = append(m.norm, toks[i].norm...)
+				m.orig = append(m.orig, toks[i].orig...)
+				i++
 			}
-			if match {
+			out = append(out, m)
+		} else {
+			out = append(out, toks[i])
+			i++
+		}
+	}
+	return out
+}
+
+// markMatches flags, in mask, the original indices of any stem found within a
+// single (folded) token — never spanning a word boundary.
+func markMatches(src []rune, canon func(rune) rune, words []string, mask []bool) {
+	for _, tok := range tokenize(src, canon) {
+		norm := tok.norm
+		for _, w := range words {
+			wr := collapseRunes(w)
+			n := len(wr)
+			if n == 0 || n > len(norm) {
+				continue
+			}
+			for i := 0; i+n <= len(norm); i++ {
+				match := true
 				for j := 0; j < n; j++ {
-					src[i+j] = '*'
-					low[i+j] = '*'
+					if norm[i+j] != wr[j] {
+						match = false
+						break
+					}
 				}
-				i += n - 1
+				if match {
+					for j := 0; j < n; j++ {
+						for _, oi := range tok.orig[i+j] {
+							mask[oi] = true
+						}
+					}
+				}
 			}
+		}
+	}
+}
+
+// maskProfanity replaces profanity (matched through homoglyph/leet/spacing
+// obfuscation) with one asterisk per offending rune, leaving other text intact.
+func maskProfanity(s string) string {
+	src := []rune(s)
+	mask := make([]bool, len(src))
+	markMatches(src, canonRU, badWordsRU, mask)
+	markMatches(src, canonLatin, badWordsLatin, mask)
+	for i := range src {
+		if mask[i] {
+			src[i] = '*'
 		}
 	}
 	return string(src)
