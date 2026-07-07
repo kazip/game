@@ -1315,12 +1315,12 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		rInstance, ok := s.rooms[roomID]
 		s.mu.Unlock()
 		if !ok {
-			conn.WriteJSON(wsMessage{Type: "error", Error: "Комната не найдена."})
+			wsWriteJSON(conn, wsMessage{Type: "error", Error: "Комната не найдена."})
 			conn.Close()
 			return
 		}
 		if !rInstance.canJoin(playerID) {
-			conn.WriteJSON(wsMessage{Type: "error", Error: "Комната заполнена."})
+			wsWriteJSON(conn, wsMessage{Type: "error", Error: "Комната заполнена."})
 			conn.Close()
 			return
 		}
@@ -1332,7 +1332,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	normalizedMode := normalizeMode(mode)
 	rInstance := s.getOrCreateRoom(roomName, normalizedMode)
 	if rInstance.state.Mode != normalizedMode {
-		conn.WriteJSON(wsMessage{Type: "error", Error: "Эта комната создана в другом режиме."})
+		wsWriteJSON(conn, wsMessage{Type: "error", Error: "Эта комната создана в другом режиме."})
 		conn.Close()
 		return
 	}
@@ -1493,6 +1493,7 @@ func (r *room) dropConnection(conn *websocket.Conn) {
 	id, ok := r.connections[conn]
 	delete(r.connections, conn)
 	conn.Close()
+	wsForget(conn)
 	if ok {
 		r.inputs[id] = vector{}
 		r.schedulePlayerRemovalLocked(id)
@@ -1566,12 +1567,12 @@ func (r *room) sendFullState(conn *websocket.Conn) {
 	quantizeStateForSend(&stateCopy)
 	if r.server.binaryProtocolEnabled() {
 		data := protocol.EncodeState(toProtocolGameState(stateCopy))
-		conn.WriteMessage(websocket.BinaryMessage, data)
+		wsWrite(conn, websocket.BinaryMessage, data)
 		return
 	}
 	msg := wsMessage{Type: "state", State: &stateCopy, Full: true}
 	data, _ := json.Marshal(msg)
-	conn.WriteMessage(websocket.TextMessage, data)
+	wsWrite(conn, websocket.TextMessage, data)
 }
 
 func (r *room) run() {
@@ -2073,7 +2074,7 @@ func (r *room) launchPortal(roomType string, ids []string) {
 
 	payload, _ := json.Marshal(wsMessage{Type: "portal_launch", RoomID: targetID, RoomType: roomType})
 	for _, c := range conns {
-		c.WriteMessage(websocket.TextMessage, payload)
+		wsWrite(c, websocket.TextMessage, payload)
 	}
 	go s.notifyHubRoomsUpdated(r.id)
 }
@@ -3064,6 +3065,49 @@ func (r *room) updateLobbyMessageLocked() {
 	}
 }
 
+// ─── Per-connection write serialisation ─────────────────────────────────────
+// gorilla/websocket PANICS on concurrent writes to one connection. Writes happen
+// from several goroutines (the broadcast loop, async launchPortal / rooms_updated
+// pushes, per-connection join handling, chat). Every write MUST go through wsWrite
+// / wsWriteJSON so it holds that connection's dedicated mutex.
+var (
+	wsLocksMu sync.Mutex
+	wsLocks   = map[*websocket.Conn]*sync.Mutex{}
+)
+
+func connWriteMutex(conn *websocket.Conn) *sync.Mutex {
+	wsLocksMu.Lock()
+	m, ok := wsLocks[conn]
+	if !ok {
+		m = &sync.Mutex{}
+		wsLocks[conn] = m
+	}
+	wsLocksMu.Unlock()
+	return m
+}
+
+func wsWrite(conn *websocket.Conn, messageType int, data []byte) error {
+	m := connWriteMutex(conn)
+	m.Lock()
+	defer m.Unlock()
+	return conn.WriteMessage(messageType, data)
+}
+
+func wsWriteJSON(conn *websocket.Conn, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return wsWrite(conn, websocket.TextMessage, data)
+}
+
+// wsForget drops a closed connection's write mutex so the map doesn't leak.
+func wsForget(conn *websocket.Conn) {
+	wsLocksMu.Lock()
+	delete(wsLocks, conn)
+	wsLocksMu.Unlock()
+}
+
 func (r *room) broadcastState() {
 	r.mu.Lock()
 	stateCopy := r.snapshotLocked()
@@ -3095,7 +3139,7 @@ func (r *room) broadcastState() {
 		return
 	}
 	for _, conn := range connections {
-		conn.WriteMessage(websocket.BinaryMessage, data)
+		wsWrite(conn, websocket.BinaryMessage, data)
 	}
 }
 
@@ -3104,7 +3148,7 @@ func (r *room) broadcastJSONState(stateCopy gameState, previous *gameState, conn
 		payload := wsMessage{Type: "state", State: &stateCopy, Full: true}
 		data, _ := json.Marshal(payload)
 		for _, conn := range connections {
-			conn.WriteMessage(websocket.TextMessage, data)
+			wsWrite(conn, websocket.TextMessage, data)
 		}
 		return
 	}
@@ -3113,7 +3157,7 @@ func (r *room) broadcastJSONState(stateCopy gameState, previous *gameState, conn
 		payload := wsMessage{Type: "patch", Patch: patch}
 		data, _ := json.Marshal(payload)
 		for _, conn := range connections {
-			conn.WriteMessage(websocket.TextMessage, data)
+			wsWrite(conn, websocket.TextMessage, data)
 		}
 	}
 }
@@ -3122,7 +3166,7 @@ func (r *room) sendProtocolInfo(conn *websocket.Conn) {
 	binary := r.server.binaryProtocolEnabled()
 	payload := wsMessage{Type: "protocol", Binary: boolPtr(binary)}
 	data, _ := json.Marshal(payload)
-	conn.WriteMessage(websocket.TextMessage, data)
+	wsWrite(conn, websocket.TextMessage, data)
 }
 
 // sendToPlayer writes a raw JSON message to every connection of one player.
@@ -3136,7 +3180,7 @@ func (r *room) sendToPlayer(playerID string, data []byte) {
 	}
 	r.mu.Unlock()
 	for _, c := range conns {
-		c.WriteMessage(websocket.TextMessage, data)
+		wsWrite(c, websocket.TextMessage, data)
 	}
 }
 
@@ -3175,7 +3219,7 @@ func (s *server) notifyHubRoomsUpdated(hubID string) {
 
 	payload, _ := json.Marshal(wsMessage{Type: "rooms_updated", HubID: hubID, Rooms: rooms})
 	for _, c := range conns {
-		c.WriteMessage(websocket.TextMessage, payload)
+		wsWrite(c, websocket.TextMessage, payload)
 	}
 }
 
@@ -3428,7 +3472,7 @@ func (r *room) broadcastChat(senderID string, msg chatMessage) {
 		if playerID == senderID {
 			continue
 		}
-		conn.WriteMessage(websocket.TextMessage, data)
+		wsWrite(conn, websocket.TextMessage, data)
 	}
 }
 
