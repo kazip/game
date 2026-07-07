@@ -1701,6 +1701,13 @@ func (r *room) beginRoundLocked() {
 		p.Alive = true
 		p.Zombie = false
 		p.Score = 0
+		// This-round stats reset here; the cumulative ones (Kills, Deaths, …) do NOT.
+		p.RoundKills = 0
+		p.RoundDeaths = 0
+		p.RoundFish = 0
+		p.RoundBombCarries = 0
+		p.RoundBombPasses = 0
+		p.RoundBombHoldTime = 0
 		p.Disguise = ""
 		p.Size = catSize
 		p.Health = shooterMaxHealth
@@ -2055,6 +2062,7 @@ func (r *room) updatePlayersLocked() {
 				p.Alive = false
 				p.Moving = false
 				p.Deaths++
+				p.RoundDeaths++
 				break
 			}
 		}
@@ -2240,6 +2248,7 @@ func (r *room) assignBombLocked(id string, resetTimer bool) {
 	r.applyBombSlowdownLocked(id)
 	if p, ok := r.players[id]; ok {
 		p.BombCarries++ // became the holder (round-start or mid-round reassign)
+		p.RoundBombCarries++
 		r.state.Message = fmt.Sprintf("Бомба у %s!", fallbackName(p.Name))
 	}
 }
@@ -2268,7 +2277,9 @@ func (r *room) handleBombTransferLocked() {
 			r.state.BombTimer = math.Max(r.state.BombTimer, 0) + bombTimerBonus
 			r.applyBombSlowdownLocked(p.ID)
 			holder.BombPasses++ // passed the bomb away
-			p.BombCarries++     // received it (now carrying)
+			holder.RoundBombPasses++
+			p.BombCarries++ // received it (now carrying)
+			p.RoundBombCarries++
 			r.lastBombPassFrom = holder.ID
 			r.lastBombPassTo = p.ID
 			r.lastBombPassAt = time.Now()
@@ -2298,8 +2309,10 @@ func (r *room) handleZombieInfectionsLocked() {
 			if math.Hypot(z.X-h.X, z.Y-h.Y) < zombieTouchDist {
 				h.Zombie = true
 				h.Deaths++ // infected — counts as an elimination this round
+				h.RoundDeaths++
 				z.Score++
 				z.Kills++
+				z.RoundKills++
 				r.state.Message = fmt.Sprintf("%s заражён!", fallbackName(h.Name))
 			}
 		}
@@ -2634,8 +2647,10 @@ func (r *room) resolveShooterCombatLocked() {
 				target.Alive = false
 				target.Moving = false
 				target.Deaths++
+				target.RoundDeaths++
 				shooter.Score++
 				shooter.Kills++
+				shooter.RoundKills++
 				r.state.Message = fmt.Sprintf("%s выбил %s", fallbackName(shooter.Name), fallbackName(target.Name))
 			}
 		}
@@ -2719,8 +2734,10 @@ func (r *room) handleHideSeekCapturesLocked() {
 			player.Disguise = ""
 			player.Size = catSize
 			player.Deaths++
+			player.RoundDeaths++
 			seeker.Score++
 			seeker.Kills++
+			seeker.RoundKills++
 			remaining := r.countRemainingHidersLocked()
 			if remaining == 0 {
 				r.state.WinnerID = seeker.ID
@@ -2757,6 +2774,7 @@ func (r *room) updateBombPassLocked() {
 	r.handleBombTransferLocked()
 	if h := r.players[r.state.BombHolder]; h != nil && h.Alive {
 		h.BombHoldTime += tickRate.Seconds() // accumulate time spent holding the bomb
+		h.RoundBombHoldTime += tickRate.Seconds()
 	}
 	r.state.BombTimer -= tickRate.Seconds()
 	if r.state.BombTimer < 0 {
@@ -2773,6 +2791,7 @@ func (r *room) updateBombPassLocked() {
 		holder.Alive = false
 		holder.Moving = false
 		holder.Deaths++
+		holder.RoundDeaths++
 		r.state.Message = fmt.Sprintf("%s не успел избавиться от бомбы!", fallbackName(holder.Name))
 		r.state.BombHolder = ""
 		r.state.BombTimer = bombTimerDuration
@@ -2811,6 +2830,7 @@ func (r *room) updateFishLocked() {
 		if dist <= fishCatchDistance {
 			p.Score += 1
 			p.FishCaught++
+			p.RoundFish++
 			r.spawnFishLocked()
 			break
 		}

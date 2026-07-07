@@ -407,20 +407,28 @@ type playerState struct {
 	// (re-entering from the hub) — deliberately NOT reset in beginRoundLocked.
 	// They reach clients via the full snapshot forced at round end, so they need
 	// no incremental-patch plumbing.
-	Kills        int           `json:"kills"`
-	Deaths       int           `json:"deaths"`
-	FishCaught   int           `json:"fishCaught"`
-	BombCarries  int           `json:"bombCarries"`
-	BombPasses   int           `json:"bombPasses"`
-	BombHoldTime float64       `json:"bombHoldTime"`
-	RoundWins    int           `json:"roundWins"`
-	Health       int           `json:"health"`
-	Weapon       string        `json:"weapon,omitempty"`
-	Ammo         int           `json:"ammo"`
-	Armor        int           `json:"armor"`
-	Appearance   catAppearance `json:"appearance"`
-	Disguise     string        `json:"disguise,omitempty"`
-	Zombie       bool          `json:"zombie,omitempty"`
+	Kills        int     `json:"kills"`
+	Deaths       int     `json:"deaths"`
+	FishCaught   int     `json:"fishCaught"`
+	BombCarries  int     `json:"bombCarries"`
+	BombPasses   int     `json:"bombPasses"`
+	BombHoldTime float64 `json:"bombHoldTime"`
+	RoundWins    int     `json:"roundWins"`
+	// This-round-only stats (reset every round in beginRoundLocked). They let the
+	// results screen separate "этот раунд" from the cumulative "всего за игру".
+	RoundKills        int           `json:"roundKills"`
+	RoundDeaths       int           `json:"roundDeaths"`
+	RoundFish         int           `json:"roundFish"`
+	RoundBombCarries  int           `json:"roundBombCarries"`
+	RoundBombPasses   int           `json:"roundBombPasses"`
+	RoundBombHoldTime float64       `json:"roundBombHoldTime"`
+	Health            int           `json:"health"`
+	Weapon            string        `json:"weapon,omitempty"`
+	Ammo              int           `json:"ammo"`
+	Armor             int           `json:"armor"`
+	Appearance        catAppearance `json:"appearance"`
+	Disguise          string        `json:"disguise,omitempty"`
+	Zombie            bool          `json:"zombie,omitempty"`
 	// Internal shooter timers (not serialized).
 	ShootCD    float64 `json:"-"`
 	RegenDelay float64 `json:"-"`
