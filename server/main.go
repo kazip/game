@@ -3274,6 +3274,13 @@ func (r *room) updateLobbyMessageLocked() {
 	if r.roomType == hubMode {
 		return
 	}
+	// A round already running (or its start countdown) must NEVER be re-armed by a
+	// ready toggle. Crucially, a spectator joining mid-round auto-sends "ready";
+	// since the active players who started the round still carry Ready=true, the
+	// gate below would otherwise see "everyone ready" and restart the live round.
+	if r.state.Phase == "playing" || r.state.Phase == "countdown" {
+		return
+	}
 	// Hold the results window: while it's counting down, don't let a ready flag
 	// (e.g. toggled from the lobby) re-arm the next round early.
 	if r.state.Phase == "ended" && r.resultsDelay > 0 {
