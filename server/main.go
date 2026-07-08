@@ -1825,13 +1825,15 @@ func (r *room) step() {
 			}
 		}
 	case "ended":
-		// Hold the results table open for a readable window before the lobby is
-		// allowed to re-arm the next-round countdown. Remaining mirrors the
-		// window so the client can render a "следующий раунд через Xс" timer.
+		// Hold the results table open for a readable window, then auto-start the
+		// next round. Players can cut the wait short by all pressing "Готов".
+		// Remaining mirrors the window so the client renders a countdown.
 		if r.resultsDelay > 0 {
 			r.resultsDelay -= tickRate.Seconds()
-			if r.resultsDelay < 0 {
+			if r.resultsDelay <= 0 || r.everyoneReadyLocked() {
 				r.resultsDelay = 0
+				r.beginNextRoundOrWaitLocked()
+				return
 			}
 			r.state.Remaining = r.resultsDelay
 			return
@@ -2022,6 +2024,12 @@ func (r *room) endRoundLocked(reason string) {
 	// the cumulative per-session stats (which don't ride incremental patches)
 	// reach every client for the results table.
 	r.resultsDelay = resultsWindowSecs
+	// Clear ready flags so the between-rounds "Готов" button is meaningful: the
+	// next round auto-starts when the window elapses, or sooner once everyone
+	// re-readies during it.
+	for _, p := range r.players {
+		p.Ready = false
+	}
 	r.lastBroadcastState = nil
 }
 
@@ -3222,6 +3230,42 @@ func (r *room) spawnFishLocked() {
 		r.state.Mines = r.generateMinesLocked()
 		r.refreshPowerUpLocked()
 	}
+}
+
+// everyoneReadyLocked reports whether every active (non-spectator) player has hit
+// "Готов" and there are enough of them to start — used to cut the between-rounds
+// wait short. Caller holds r.mu.
+func (r *room) everyoneReadyLocked() bool {
+	ready, total := 0, 0
+	for _, p := range r.players {
+		if p.Spectator {
+			continue
+		}
+		total++
+		if p.Ready {
+			ready++
+		}
+	}
+	return total >= minPlayersToStart && ready == total
+}
+
+// beginNextRoundOrWaitLocked starts the next-round countdown when enough players
+// are present; otherwise drops back to the lobby to wait for more. Called when the
+// between-rounds window closes (timer elapsed or everyone ready). Caller holds r.mu.
+func (r *room) beginNextRoundOrWaitLocked() {
+	active := 0
+	for _, p := range r.players {
+		if !p.Spectator {
+			active++
+		}
+	}
+	if active >= minPlayersToStart {
+		r.state.Message = "Новый раунд!"
+		r.state.Phase = "countdown"
+		r.state.Countdown = countdownDuration.Seconds()
+		return
+	}
+	r.updateLobbyMessageLocked()
 }
 
 func (r *room) updateLobbyMessageLocked() {

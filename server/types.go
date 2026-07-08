@@ -155,7 +155,7 @@ const (
 	bombTimerBonus        = 10.0
 	dataFileName          = "data.json"
 	reconnectGrace        = 10 * time.Second
-	resultsWindowSecs     = 30.0 // how long the end-of-round results table stays up
+	resultsWindowSecs     = 15.0 // how long the end-of-round results table stays up before the next round auto-starts (players can hit "Готов" to start sooner)
 
 	// ─── Hub / room-tree ────────────────────────────────────────────────
 	hubMode       = "hub" // a free-roam social room, no game logic
