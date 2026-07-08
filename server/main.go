@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -537,6 +538,29 @@ type server struct {
 	mu             sync.Mutex
 	upgrader       websocket.Upgrader
 	protocolBinary bool
+
+	// Lightweight audit trail: last-seen client IP per playerId, so per-round
+	// logging can attribute IPs without holding the request. Guarded by its OWN
+	// mutex (netMu) — NEVER the room/server lock hierarchy — so it can be read
+	// from inside a room lock (e.g. beginRoundLocked) without deadlock.
+	netMu     sync.Mutex
+	playerNet map[string]string
+
+	// Per-pooled-room "is a game already running & joinable" snapshot, refreshed
+	// each tick by every game room's step(). Guarded by its OWN leaf mutex
+	// (liveMu) so the HUB's updatePortalsLocked can read it while holding the hub's
+	// r.mu — the s.mu→r.mu order forbids taking s.mu there. Keyed by roomID.
+	liveMu    sync.Mutex
+	liveRooms map[string]liveRoomInfo
+}
+
+// liveRoomInfo is the leaf-cached, lock-order-safe view a hub needs to decide
+// whether a lone cat may arm a portal (because a game of that type is in progress
+// and has room to spectate-join). See server.liveRooms / hubTypeHasLiveRoom.
+type liveRoomInfo struct {
+	hubID    string
+	roomType string
+	joinable bool // phase is countdown/playing/ended AND not at capacity
 }
 
 func newServer() *server {
@@ -545,6 +569,8 @@ func newServer() *server {
 		cats:           make(map[string]catProfile),
 		ratings:        make(map[string]*playerRating),
 		rooms:          make(map[string]*room),
+		playerNet:      make(map[string]string),
+		liveRooms:      make(map[string]liveRoomInfo),
 		upgrader:       websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
 		protocolBinary: binaryProtocol,
 		dataPath:       resolveDataPath(),
@@ -795,6 +821,19 @@ func (r *room) isFullLocked() bool {
 		return false
 	}
 	return len(r.players) >= r.maxPlayers
+}
+
+// isLiveJoinableLocked reports whether a real game is already in progress here AND
+// there's room for one more cat to join (as a spectator promoted next round).
+// "In progress" is countdown/playing/ended — NOT lobby (a fresh game still needs
+// the normal minimum to start). Requires at least the start-minimum of players
+// present so a stray empty room left in "ended" doesn't read as live. Holds r.mu.
+func (r *room) isLiveJoinableLocked() bool {
+	switch r.state.Phase {
+	case "countdown", "playing", "ended":
+		return len(r.players) >= minPlayersToStart && !r.isFullLocked()
+	}
+	return false
 }
 
 func (s *server) removeConnection(conn *websocket.Conn) {
@@ -1296,6 +1335,78 @@ func (s *server) handleReports(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"reports": out})
 }
 
+// clientIP returns the best-guess originating client IP, honoring the
+// reverse-proxy headers that catgame.derium.ru sits behind (nginx/caddy set
+// X-Forwarded-For / X-Real-IP; RemoteAddr would otherwise be 127.0.0.1).
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// The first entry is the original client; the rest are proxy hops.
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
+		return xrip
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// recordPlayerNet remembers a player's most recent IP for per-round audit logs.
+func (s *server) recordPlayerNet(playerID, ip string) {
+	if playerID == "" || ip == "" {
+		return
+	}
+	s.netMu.Lock()
+	s.playerNet[playerID] = ip
+	s.netMu.Unlock()
+}
+
+// playerNetOf returns the last-seen IP for a player ("?" if unknown).
+func (s *server) playerNetOf(playerID string) string {
+	s.netMu.Lock()
+	ip := s.playerNet[playerID]
+	s.netMu.Unlock()
+	if ip == "" {
+		return "?"
+	}
+	return ip
+}
+
+// publishLiveRoom records a pooled game room's current joinability so hubs can
+// see it without taking s.mu. Called from the room's own step() under r.mu; the
+// leaf liveMu is never held while acquiring any other lock, so this is safe.
+func (s *server) publishLiveRoom(id, hubID, roomType string, joinable bool) {
+	s.liveMu.Lock()
+	s.liveRooms[id] = liveRoomInfo{hubID: hubID, roomType: roomType, joinable: joinable}
+	s.liveMu.Unlock()
+}
+
+// forgetLiveRoom drops a room from the live snapshot (on room teardown).
+func (s *server) forgetLiveRoom(id string) {
+	s.liveMu.Lock()
+	delete(s.liveRooms, id)
+	s.liveMu.Unlock()
+}
+
+// hubTypeHasLiveRoom reports whether the given hub currently has a game of this
+// type that is already running and still has room to join (as a spectator who is
+// promoted next round). Read from the hub's updatePortalsLocked under the hub
+// r.mu — allowed because liveMu is a leaf lock (never nested under s.mu/r.mu).
+func (s *server) hubTypeHasLiveRoom(hubID, roomType string) bool {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	for _, lr := range s.liveRooms {
+		if lr.hubID == hubID && lr.roomType == roomType && lr.joinable {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	roomID := r.URL.Query().Get("roomId")
 	roomName := r.URL.Query().Get("room")
@@ -1306,6 +1417,13 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "roomId (or room) and playerId required", http.StatusBadRequest)
 		return
 	}
+	ip := clientIP(r)
+	s.recordPlayerNet(playerID, ip)
+	roomKey := roomID
+	if roomKey == "" {
+		roomKey = roomName
+	}
+	log.Printf("JOIN player=%s name=%q ip=%s room=%s mode=%s", playerID, playerName, ip, roomKey, mode)
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("upgrade error: %v", err)
@@ -1498,6 +1616,11 @@ func (r *room) dropConnection(conn *websocket.Conn) {
 	conn.Close()
 	wsForget(conn)
 	if ok {
+		name := ""
+		if p := r.players[id]; p != nil {
+			name = p.Name
+		}
+		log.Printf("LEAVE player=%s name=%q ip=%s room=%s", id, name, r.server.playerNetOf(id), r.id)
 		r.inputs[id] = vector{}
 		r.schedulePlayerRemovalLocked(id)
 	}
@@ -1614,6 +1737,13 @@ func (r *room) step() {
 	if r.roomType == hubMode {
 		r.updateHubLocked()
 		return
+	}
+
+	// Publish this pooled room's joinability so the parent hub can let a lone cat
+	// arm the portal when a game of this type is already running. Reflects the
+	// phase as of this tick's start (a one-tick lag is harmless for arming).
+	if r.hubID != "" {
+		r.server.publishLiveRoom(r.id, r.hubID, r.roomType, r.isLiveJoinableLocked())
 	}
 
 	switch r.state.Phase {
@@ -1740,6 +1870,14 @@ func (r *room) beginRoundLocked() {
 		p.Alive = true
 		p.Spectator = false
 	}
+	if len(r.players) > 0 {
+		parts := make([]string, 0, len(r.players))
+		for id, p := range r.players {
+			parts = append(parts, fmt.Sprintf("%s(%s)@%s", id, fallbackName(p.Name), r.server.playerNetOf(id)))
+		}
+		sort.Strings(parts)
+		log.Printf("GAME room=%s mode=%s players=%d [%s]", r.id, r.state.Mode, len(r.players), strings.Join(parts, " "))
+	}
 	if r.isBombMode() {
 		r.state.Fish = fishState{Size: fishSize, Alive: false, Type: "normal", Direction: 1}
 		r.state.PowerUp.Active = false
@@ -1842,9 +1980,28 @@ func (r *room) endRoundLocked(reason string) {
 	// never nests s.mu inside r.mu (see awardRatings).
 	if !r.ratingAwarded {
 		r.ratingAwarded = true
-		// Session round-win tally for the results screen.
-		if w := r.players[r.state.WinnerID]; w != nil {
-			w.RoundWins++
+		// Winner set. Most modes have exactly one (WinnerID). Two modes can have
+		// MULTIPLE winners who each get a rating win, not just the highlighted one:
+		//   - hide-and-seek: if the seeker failed to find everyone, every hider who
+		//     stayed hidden (still Alive) wins together.
+		//   - zombies: if the survivors held out (not everyone was infected), every
+		//     surviving cat (Alive & not a zombie) wins together.
+		hidersWon := r.isHideSeekMode() && r.state.WinnerID != r.state.SeekerID
+		catsWon := r.isZombieMode() && !r.allZombiesLocked()
+		isWinner := func(id string, p *playerState) bool {
+			if hidersWon {
+				return p.Alive && id != r.state.SeekerID
+			}
+			if catsWon {
+				return p.Alive && !p.Zombie
+			}
+			return id == r.state.WinnerID
+		}
+		// Session round-win tally for the results "Всего за игру" tab.
+		for id, p := range r.players {
+			if !p.Spectator && isWinner(id, p) {
+				p.RoundWins++
+			}
 		}
 		if r.roomType != hubMode {
 			// Only players who actually took part are rated — spectators excluded.
@@ -1853,7 +2010,7 @@ func (r *room) endRoundLocked(reason string) {
 				if p.Spectator {
 					continue
 				}
-				parts = append(parts, ratingParticipant{ID: id, Name: p.Name, Winner: id == r.state.WinnerID})
+				parts = append(parts, ratingParticipant{ID: id, Name: p.Name, Winner: isWinner(id, p)})
 			}
 			if len(parts) >= 2 {
 				go r.awardRatings(parts, r.state.Mode)
@@ -2038,7 +2195,15 @@ func (r *room) updatePortalsLocked() {
 		if r.portalCooldown[t] > 0 {
 			r.portalCooldown[t] = math.Max(0, r.portalCooldown[t]-dt)
 		}
-		if len(occ) >= portalMinPlayers && r.portalCooldown[t] <= 0 {
+		// A game already running for this type can be joined by a single cat (they
+		// spectate the current round, then play from the next). Only a FRESH game
+		// still needs the normal minimum, so it can actually start a round.
+		live := r.server.hubTypeHasLiveRoom(r.id, t)
+		need := portalMinPlayers
+		if live {
+			need = 1
+		}
+		if len(occ) >= need && r.portalCooldown[t] <= 0 {
 			if r.portalCountdown[t] <= 0 {
 				r.portalCountdown[t] = portalCountdownSecs
 			} else {
@@ -2057,7 +2222,8 @@ func (r *room) updatePortalsLocked() {
 			Type:      t,
 			Count:     len(occ),
 			Countdown: r.portalCountdown[t],
-			Min:       portalMinPlayers,
+			Min:       need,
+			Live:      live,
 		})
 	}
 	r.state.Portals = statuses
@@ -4204,7 +4370,8 @@ func (s *server) sweepEmptyRooms() {
 	s.mu.Unlock()
 
 	for _, r := range doomed {
-		close(r.cancel) // stop the room's goroutine
+		s.forgetLiveRoom(r.id) // drop from the hub-portal live snapshot
+		close(r.cancel)        // stop the room's goroutine
 	}
 }
 

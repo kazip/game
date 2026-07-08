@@ -262,6 +262,7 @@ type portalStatus struct {
 	Count     int     `json:"count"`
 	Countdown float64 `json:"countdown"` // 0 when idle
 	Min       int     `json:"min"`
+	Live      bool    `json:"live,omitempty"` // a game of this type is already running: even 1 cat can join (as spectator → next round)
 }
 
 // Per-weapon ammo capacity and shooting cooldown (seconds) for the shooter mode.
